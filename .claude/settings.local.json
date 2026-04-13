@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:support.collibra.com)",
+      "WebFetch(domain:developer.collibra.com)",
+      "WebFetch(domain:productresources.collibra.com)"
+    ]
+  }
+}
