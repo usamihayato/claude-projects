@@ -30,17 +30,24 @@ claude-projects/
 │           ├── 03-networking/
 │           ├── 04-compute/
 │           └── 05-storage/
-└── learn-collibra-data-quality-and-observablity/  ← Collibra DQ 導入調査プロジェクト
+├── learn-collibra-data-quality-and-observablity/  ← Collibra DQ 導入調査プロジェクト
+│   ├── CLAUDE.md
+│   └── docs/
+│       ├── collibra/
+│       │   ├── setup.md
+│       │   ├── deployment-comparison.md
+│       │   └── report.md
+│       └── kubernetes/
+│           ├── aks-build.md
+│           ├── aks-design.md
+│           └── helm.md
+└── learn-sqlserver-migration/                     ← SQL Server クラウド移行調査プロジェクト
     ├── CLAUDE.md
     └── docs/
-        ├── collibra/
-        │   ├── setup.md
-        │   ├── deployment-comparison.md
-        │   └── report.md
-        └── kubernetes/
-            ├── aks-build.md
-            ├── aks-design.md
-            └── helm.md
+        ├── 01-migration-targets/
+        ├── 02-knockout-requirements/
+        ├── 03-adms/
+        └── 04-cost-analysis/
 ```
 
 ---
@@ -51,62 +58,7 @@ claude-projects/
 |---|---|---|
 | `learn-oci/` | Oracle Cloud Infrastructure (OCI) 学習用プロジェクト | OCI 資格試験対策、インフラ設計 |
 | `learn-collibra-data-quality-and-observablity/` | Collibra Data Quality & Observability 導入調査 | Azure/AKS 上での DQ Agent + Spark 構築 |
-
----
-
-## 各プロジェクトの概要
-
-### learn-oci/oci-architect-associate
-
-**目的**: Azure 経験者が OCI 資格（Architect Associate / Professional）を取得するための学習ノート
-
-**背景**:
-- 担当者は Azure Administrator・Azure Infrastructure Solutions の資格を保有
-- OCI プロジェクト参加に向けてスキルアップが必要
-
-**ドキュメント構成** (`docs/` 配下):
-| ディレクトリ | 内容 |
-|---|---|
-| `01-global-infrastructure/` | リージョン・AD・FD の概念、高可用性設計 |
-| `02-identity-and-access-management/` | IAM、ポリシー、コンパートメント |
-| `03-networking/` | VCN、サブネット、セキュリティリスト |
-| `04-compute/` | インスタンス、シェイプ、ブートボリューム |
-| `05-storage/` | オブジェクトストレージ、ブロックボリューム |
-
-**参照先**: 2025年以降の最新 OCI 資格試験に対応した情報を使用すること
-
----
-
-### learn-collibra-data-quality-and-observablity
-
-**目的**: Collibra Data Quality & Observability Classic を社内導入するための事前調査・設計ドキュメント
-
-**背景**:
-- DQ Web・Metastore はグループ会社の既存環境を共用
-- 自社が構築・運用するのは **DQ Agent** と **Spark** のみ
-- 基盤は **Azure（AKS）** で検討中
-
-**アーキテクチャの要点**:
-```
-グループ会社（既存）                自社（今回構築）
-┌──────────────────┐    ジョブ割当    ┌────────────────────┐
-│  DQ Web          │ ─────────────▶ │  DQ Agent          │
-│  Metastore (PG)  │ ◀── 結果書込 ── │  Spark クラスタ     │
-└──────────────────┘                └────────────────────┘
-         ↕ Private Endpoint（クロステナント）
-```
-
-**ドキュメント構成** (`docs/` 配下):
-| ファイル | 内容 |
-|---|---|
-| `collibra/setup.md` | スタンドアロン・AKS インストール手順、設定ファイルリファレンス |
-| `collibra/deployment-comparison.md` | スタンドアロン vs Kubernetes ネイティブの比較表・推奨構成 |
-| `collibra/report.md` | 調査レポート |
-| `kubernetes/aks-design.md` | AKS クラスター設計 |
-| `kubernetes/aks-build.md` | AKS 構築手順 |
-| `kubernetes/helm.md` | Helm チャート概要 |
-
-**推奨構成**: AKS による Kubernetes ネイティブ構成（スケール・可用性・IaC 管理の観点から）
+| `learn-sqlserver-migration/` | SQL Server クラウド移行調査 | SQL MI / DMS / ノックアウト要件 / コスト最適化 |
 
 ---
 
