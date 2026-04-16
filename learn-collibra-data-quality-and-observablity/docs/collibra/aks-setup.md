@@ -104,19 +104,147 @@
 
 ### 2.1 変数定義
 
-本手順全体で使用する環境変数を定義する。
+本手順全体で使用する環境変数を定義する。`aks-build.md` と同一の値を使用する。
+
+```bash
+# ---- Azure 基本情報 ----
+SUBSCRIPTION_ID="<サブスクリプションID>"
+LOCATION="japaneast"
+RG_NAME="rg-collibra-dq"
+
+# ---- AKS ----
+AKS_NAME="aks-collibra-dq"
+
+# ---- ACR ----
+ACR_NAME="acrcollibradq"
+ACR_LOGIN_SERVER="${ACR_NAME}.azurecr.io"
+
+# ---- Collibra DQ アプリケーション ----
+NAMESPACE="collibra-dq"
+DQ_VERSION="2026.02"
+SPARK_VERSION="4.1.0"
+HELM_RELEASE_NAME="collibra-dq"
+
+# ---- Collibra イメージレジストリ（Collibra 社提供） ----
+COLLIBRA_REGISTRY="<Collibraから提供されたレジストリURL>"
+COLLIBRA_REGISTRY_USER="<提供されたユーザー名>"
+COLLIBRA_REGISTRY_PASS="<提供されたパスワード>"
+
+# ---- ライセンス情報（Collibra 社提供） ----
+DQ_LICENSE_KEY="<ライセンスキー>"
+DQ_LICENSE_NAME="<ライセンス名>"
+
+# ---- メタストア（Azure DB for PostgreSQL） ----
+METASTORE_HOST="<PostgreSQL のホスト名>.postgres.database.azure.com"
+METASTORE_PORT="5432"
+METASTORE_DB="owlmetastore"
+METASTORE_USER="<DBユーザー名>"
+METASTORE_PASS="<DBパスワード>"
+
+# ---- DQ 管理者アカウント ----
+DQ_ADMIN_EMAIL="<管理者メールアドレス>"
+DQ_ADMIN_PASS="<管理者パスワード>"   # 8〜72文字・大文字/数字/特殊文字を各1字以上含む
+
+# ---- Helm チャートパス ----
+CHART_PATH="/home/${USER}/collibra-dq-chart"   # Helm チャート展開先（3章で設定）
+```
+
+> **注意**: パスワード類はシェル変数に直接書かず、Azure Key Vault や `.env` ファイル（Git 管理外）から読み込むことを推奨する。
 
 ### 2.2 AKS クラスターへの接続確認
 
-管理用 Linux VM から AKS クラスターへの接続と、ノード・ネームスペースの状態を確認する。
+管理用 Linux VM から AKS クラスターへの認証情報を取得し、ノードの状態を確認する。
+
+```bash
+# Azure ログイン・サブスクリプション切り替え
+az login
+az account set --subscription "${SUBSCRIPTION_ID}"
+
+# AKS の kubeconfig を取得
+az aks get-credentials \
+  --resource-group "${RG_NAME}" \
+  --name "${AKS_NAME}" \
+  --overwrite-existing
+
+# 接続確認
+kubectl cluster-info
+```
+
+**期待される出力例:**
+```
+Kubernetes control plane is running at https://aks-collibra-dq-xxxxx.privatelink.japaneast.azmk8s.io:443
+```
+
+```bash
+# ノード一覧と状態確認
+kubectl get nodes -o wide
+```
+
+**期待される出力例（全ノードが Ready）:**
+```
+NAME                              STATUS   ROLES    AGE   VERSION
+aks-system-xxxxx-vmss000000       Ready    <none>   1d    v1.32.x
+aks-dqpool-xxxxx-vmss000000       Ready    <none>   1d    v1.32.x
+aks-dqpool-xxxxx-vmss000001       Ready    <none>   1d    v1.32.x
+aks-dqpool-xxxxx-vmss000002       Ready    <none>   1d    v1.32.x
+```
+
+```bash
+# DQ 用ノードプールの確認
+kubectl get nodes -l agentpool=dqpool
+```
 
 ### 2.3 必要ツールの確認（kubectl / helm / az CLI）
 
-各ツールのバージョンと動作を確認する。Helm は v3 系が必須。
+各ツールのバージョンと動作を確認する。
+
+```bash
+# kubectl バージョン確認（クライアント・サーバーの差が1マイナーバージョン以内であること）
+kubectl version
+
+# Helm バージョン確認（v3 系であること）
+helm version
+# 期待値例: version.BuildInfo{Version:"v3.x.x", ...}
+
+# az CLI バージョン確認
+az version
+```
+
+**Helm が未インストールの場合:**
+```bash
+curl -fsSL -o get_helm.sh https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-4
+chmod 700 get_helm.sh
+./get_helm.sh
+helm version
+```
 
 ### 2.4 ネームスペース作成
 
-Collibra DQ 専用のネームスペースを作成し、以降の操作対象とする。
+Collibra DQ 専用のネームスペースを作成し、識別用ラベルを付与する。
+
+```bash
+# ネームスペース作成
+kubectl create namespace "${NAMESPACE}"
+
+# ラベル付与（リソース識別用）
+kubectl label namespace "${NAMESPACE}" \
+  app.kubernetes.io/name=collibra-dq \
+  environment=production
+
+# 確認
+kubectl get namespace "${NAMESPACE}"
+```
+
+**期待される出力例:**
+```
+NAME          STATUS   AGE
+collibra-dq   Active   5s
+```
+
+```bash
+# 以降のコマンドでネームスペース指定を省略するためのデフォルト設定（任意）
+kubectl config set-context --current --namespace="${NAMESPACE}"
+```
 
 ---
 
