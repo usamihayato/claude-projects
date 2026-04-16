@@ -858,23 +858,170 @@ kubectl get serviceaccount collibra-dq-sa -n "${NAMESPACE}" -o yaml
 
 ## 7. SSL/HTTPS 設定
 
-> **背景**: 本番環境では HTTPS 通信が必須。Collibra DQ は Java Keystore (JKS) 形式または PKCS12 形式の証明書をサポートする。
+> **背景**: 本番環境では HTTPS 通信が必須。Collibra DQ は Java Keystore (JKS) 形式または PKCS12 形式の証明書をサポートする。SAML 認証を利用する場合も SSL/TLS の設定が前提条件となる。
+
+**証明書の準備方法は2パターン:**
+
+| パターン | 内容 | 推奨場面 |
+|---|---|---|
+| A. 自己署名証明書 | keytool で新規作成 | 検証・開発環境 |
+| B. CA 署名済み証明書 | 既存の PEM 証明書を JKS に変換 | 本番環境 |
 
 ### 7.1 Java Keystore の作成
 
-`keytool` コマンドを使用して、署名済み証明書・秘密鍵を含む Keystore ファイル（`keystore.jks`）を作成する。
+#### パターン A: 自己署名証明書（検証用）
+
+管理用 VM（Java 17 インストール済み）で実行する。
+
+```bash
+# 作業ディレクトリ作成
+mkdir -p ~/ssl && cd ~/ssl
+
+# Keystore の作成（有効期間 3650 日 = 約10年）
+keytool -genkey \
+  -alias dq-server \
+  -keyalg RSA \
+  -keysize 2048 \
+  -keystore keystore.jks \
+  -validity 3650 \
+  -storepass "<keystoreパスワード>" \
+  -keypass  "<keystoreパスワード>" \
+  -dname "CN=<DQ Web のFQDNまたはIP>, OU=IT, O=<会社名>, L=Tokyo, ST=Tokyo, C=JP"
+```
+
+```bash
+# 作成確認
+keytool -list -keystore keystore.jks -storepass "<keystoreパスワード>"
+```
+
+**期待される出力例:**
+```
+Keystore type: PKCS12
+Keystore provider: SUN
+Your keystore contains 1 entry
+dq-server, YYYY/MM/DD, PrivateKeyEntry,
+Certificate fingerprint (SHA-256): xx:xx:xx:...
+```
+
+#### パターン B: CA 署名済み証明書（本番用）
+
+既存の PEM 形式証明書（`.crt` / `.key`）を JKS に変換する。
+
+```bash
+# Step 1: PEM → PKCS12 に変換
+openssl pkcs12 -export \
+  -in   server.crt \
+  -inkey server.key \
+  -chain \
+  -CAfile ca-chain.crt \
+  -name  dq-server \
+  -out   keystore.p12 \
+  -passout pass:"<keystoreパスワード>"
+
+# Step 2: PKCS12 → JKS に変換
+keytool -importkeystore \
+  -srckeystore   keystore.p12 \
+  -srcstoretype  PKCS12 \
+  -srcstorepass  "<keystoreパスワード>" \
+  -destkeystore  keystore.jks \
+  -deststoretype JKS \
+  -deststorepass "<keystoreパスワード>"
+```
 
 ### 7.2 CA 証明書のインポート
 
-外部データソース接続で使用する CA 証明書を Java の `cacerts` にインポートする。
+外部データソース（SQL Server / Oracle 等）が SSL を要求する場合、その CA 証明書を Java の `cacerts` に追加する。
+
+```bash
+# Java 17 の cacerts パスを確認
+JAVA_CACERTS=$(find /usr/lib/jvm -name "cacerts" 2>/dev/null | head -1)
+echo "cacerts: ${JAVA_CACERTS}"
+
+# CA 証明書をインポート（複数ある場合は繰り返す）
+keytool -import \
+  -alias  "external-db-ca" \
+  -file   ca-cert.pem \
+  -keystore "${JAVA_CACERTS}" \
+  -storepass "changeit" \
+  -noprompt
+
+# インポート確認
+keytool -list -keystore "${JAVA_CACERTS}" \
+  -storepass "changeit" | grep "external-db-ca"
+```
+
+> **補足**: `cacerts` への変更は Collibra DQ コンテナには直接反映されない。コンテナ内の `cacerts` に反映するには、Dockerfile で追加するか、7.3 節の Secret に `cacerts` も含めてマウントする。
 
 ### 7.3 Kubernetes Secret への登録
 
-作成した Keystore ファイルを Kubernetes Secret（`dq-ssl-secret`）として対象ネームスペースに登録する。
+作成した Keystore ファイルを Kubernetes Secret として対象ネームスペースに登録する。
+
+```bash
+kubectl create secret generic dq-ssl-secret \
+  --from-file=keystore.jks=~/ssl/keystore.jks \
+  --namespace "${NAMESPACE}"
+```
+
+登録確認（ファイルが格納されていることを確認）。
+
+```bash
+kubectl get secret dq-ssl-secret -n "${NAMESPACE}"
+kubectl describe secret dq-ssl-secret -n "${NAMESPACE}"
+```
+
+**期待される出力例:**
+```
+Name:         dq-ssl-secret
+Namespace:    collibra-dq
+Type:         Opaque
+Data
+====
+keystore.jks:  3452 bytes
+```
 
 ### 7.4 Helm パラメータ設定
 
-Helm の `values.yaml` または `--set` オプションで TLS 関連パラメータ（`global.web.tls.enabled`、証明書エイリアス、パスワード等）を設定する。
+Helm デプロイ時（9章）に以下のパラメータを追加して TLS を有効化する。
+
+**`--set` で指定する場合:**
+
+```bash
+--set global.web.tls.enabled=true \
+--set global.web.tls.key.secretName=dq-ssl-secret \
+--set global.web.tls.key.alias=dq-server \
+--set global.web.tls.key.type=JKS \
+--set global.web.tls.key.pass="<keystoreパスワード>" \
+--set global.web.tls.key.store.name=keystore.jks
+```
+
+**`custom-values.yaml` に記載する場合（推奨）:**
+
+```yaml
+global:
+  web:
+    tls:
+      enabled: true
+      key:
+        secretName: dq-ssl-secret
+        alias: dq-server
+        type: JKS          # JKS または PKCS12
+        pass: "<keystoreパスワード>"
+        store:
+          name: keystore.jks
+```
+
+TLS 有効化時に DQ Web の ConfigMap に設定される主要な環境変数：
+
+| 環境変数 | 値 | 説明 |
+|---|---|---|
+| `SERVER_HTTPS_ENABLED` | `true` | HTTPS 有効化 |
+| `SERVER_HTTP_ENABLED` | `false` | HTTP 無効化（本番推奨） |
+| `SERVER_REQUIRE_SSL` | `true` | SSL 必須化 |
+| `SERVER_SSL_KEY_TYPE` | `JKS` | Keystore 形式 |
+| `SERVER_SSL_KEY_STORE` | `keystore.jks` | Keystore ファイル名 |
+| `SERVER_SSL_KEY_ALIAS` | `dq-server` | キーエイリアス |
+
+> **注意**: TLS 有効化後、DQ Web へのアクセス URL は `https://<host>:9000` となる。Ingress を使用する場合は 10 章の設定も合わせて変更すること。
 
 ---
 
