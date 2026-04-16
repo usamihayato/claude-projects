@@ -808,4 +808,361 @@ ROUTER_IP=$(oc get svc router-default -n openshift-ingress \
 
 ---
 
-*（続き：11〜16章は別途作成）*
+## 11. Helm デプロイの差異
+
+### 11.1 デプロイ前チェックリストの差異
+
+ARO には AKS にない SCC の確認ステップが加わる。
+
+| チェック項目 | AKS | ARO |
+|---|---|---|
+| Namespace / Project の確認 | `kubectl get namespace` | `oc get project` |
+| PVC の確認 | `kubectl get pvc -n` | `oc get pvc -n` |
+| Secret の確認 | `kubectl get secret -n` | `oc get secret -n` |
+| **SCC の確認（ARO 固有）** | 不要 | `oc adm policy who-can use scc anyuid \| grep collibra-dq-sa` |
+| チャートの確認 | `ls ${CHART_PATH}/Chart.yaml` | 同左 |
+
+### 11.2 custom-values.yaml の主要差異
+
+ファイル名と TLS・securityContext の設定が異なる。その他の設定（メタストア接続・PVC 参照・イメージリポジトリ）は共通。
+
+| 設定キー | AKS（custom-values.yaml） | ARO（custom-values-aro.yaml） |
+|---|---|---|
+| `global.web.tls.enabled` | `true`（JKS を使用） | `false`（Edge Route が TLS を処理） |
+| `global.web.tls.key.secretName` | `dq-ssl-secret` | 設定不要 |
+| `podSecurityContext.runAsUser` | `1000`（UID を明示指定可） | 省略（ARO が自動割り当て） |
+| `podSecurityContext.runAsNonRoot` | `true` | `true` |
+| `securityContext.capabilities.drop` | 省略可 | `["ALL"]`（restricted-v2 準拠） |
+| `serviceAccount.name` | `collibra-dq-sa` | `collibra-dq-sa`（SCC 付与済みであること） |
+
+**AKS（TLS 有効・UID 指定あり）:**
+
+```yaml
+global:
+  web:
+    tls:
+      enabled: true
+      key:
+        secretName: dq-ssl-secret
+        alias: dq-server
+        type: JKS
+        pass: "<keystoreパスワード>"
+        store:
+          name: keystore.jks
+  # securityContext で UID を明示指定
+podSecurityContext:
+  runAsUser: 1000
+  runAsGroup: 1000
+  fsGroup: 1000
+  runAsNonRoot: true
+```
+
+**ARO（TLS 無効・UID 省略）:**
+
+```yaml
+global:
+  web:
+    tls:
+      enabled: false          # Route の Edge termination が TLS を処理
+# securityContext は runAsNonRoot のみ（UID は省略）
+podSecurityContext:
+  runAsNonRoot: true
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL
+```
+
+### 11.3 helm upgrade --install コマンドの差異
+
+コマンド本体は同一。`--namespace` の参照変数と、シークレット参照コマンドが `kubectl` → `oc` に変わる。
+
+```bash
+# AKS
+helm upgrade --install "${HELM_RELEASE_NAME}" "${CHART_PATH}" \
+  --namespace "${NAMESPACE}" \
+  --values ~/custom-values.yaml \
+  --set global.configMap.data.license_key="$(
+      kubectl get secret dq-license-secret -n ${NAMESPACE} \
+        -o jsonpath='{.data.license_key}' | base64 -d)" \
+  --timeout 10m --wait
+
+# ARO（--namespace と secret 参照コマンドのみ変更）
+helm upgrade --install "${HELM_RELEASE_NAME}" "${CHART_PATH}" \
+  --namespace "${OC_PROJECT}" \
+  --values ~/custom-values-aro.yaml \
+  --set global.configMap.data.license_key="$(
+      oc get secret dq-license-secret -n ${OC_PROJECT} \
+        -o jsonpath='{.data.license_key}' | base64 -d)" \
+  --timeout 10m --wait
+```
+
+### 11.4 デプロイ後の SCC 確認（ARO 固有）
+
+ARO では Pod 起動後に使用された SCC を確認できる。
+
+```bash
+# ARO 固有: 起動中 Pod の SCC を確認
+oc get pod -n "${OC_PROJECT}" \
+  -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.metadata.annotations.openshift\.io/scc}{"\n"}{end}'
+
+# 期待値: anyuid または collibra-dq-scc が表示されること
+```
+
+---
+
+## 12. RBAC・Agent / Spark 設定
+
+### 12.1 RBAC の差異
+
+Role / RoleBinding の YAML 定義は AKS / ARO で同一。ARO では RBAC に加えて SCC 付与が必須。
+
+| 設定内容 | AKS | ARO |
+|---|---|---|
+| ServiceAccount 作成 | `kubectl apply` | `oc apply` |
+| Role / RoleBinding 作成 | `kubectl apply` | `oc apply` |
+| **SCC 付与（ARO 固有）** | 不要 | `oc adm policy add-scc-to-user anyuid -z dq-agent-sa` |
+| SCC の確認 | 不要 | `oc adm policy who-can use scc/anyuid` |
+
+> **重要**: ARO で SCC 付与を忘れると Spark Executor Pod の動的生成時に以下のエラーが発生する。
+> ```
+> Error creating: pods "spark-exec-xxx" is forbidden:
+>   unable to validate against any security context constraint
+> ```
+
+### 12.2 Spark nodeSelector の差異
+
+AKS と ARO ではノードラベルの付け方が異なるため、`nodeSelector` の指定が変わる。
+
+| 観点 | AKS | ARO |
+|---|---|---|
+| ノード種別ラベル | `agentpool: <pool名>`（AKS が自動付与） | `node-role.kubernetes.io/worker: ""`（OpenShift 標準） |
+| 専用プール指定 | `agentpool: dqpool` | `node-role.kubernetes.io/worker: ""`（worker 全体） |
+| 特定ノードプール指定 | `agentpool: dqpool` | カスタムラベルを別途付与して指定 |
+
+```yaml
+# AKS（Spark Executor の nodeSelector）
+spark:
+  nodeSelector:
+    agentpool: dqpool          # AKS ノードプール名
+
+# ARO（Spark Executor の nodeSelector）
+spark:
+  nodeSelector:
+    node-role.kubernetes.io/worker: ""    # OpenShift ワーカーノード全体
+```
+
+ARO で特定のノードグループに限定したい場合は、ノードにカスタムラベルを追加して指定する。
+
+```bash
+# ARO のワーカーノードにカスタムラベルを付与
+oc label node <worker-node-name> workload=dq
+
+# custom-values-aro.yaml での指定
+# spark:
+#   nodeSelector:
+#     workload: dq
+```
+
+### 12.3 Spark securityContext の差異
+
+Executor Pod の securityContext も AKS / ARO で異なる。
+
+```yaml
+# AKS: UID を明示指定可能
+spark:
+  driver:
+    serviceAccount: dq-agent-sa
+  executor:
+    securityContext:
+      runAsUser: 1000
+
+# ARO: UID は省略（SCC が継承・自動割り当て）
+spark:
+  driver:
+    serviceAccount: dq-agent-sa
+    securityContext:
+      runAsNonRoot: true        # UID は anyuid SCC が処理
+  executor:
+    securityContext:
+      runAsNonRoot: true
+```
+
+---
+
+## 13. 監視・ログ
+
+### 13.1 監視スタックの違い
+
+| 観点 | AKS | ARO |
+|---|---|---|
+| 監視基盤 | Azure Monitor / Container Insights | OpenShift 組み込み監視（Prometheus / Alertmanager） |
+| 有効化 | AKS 作成時または `az aks enable-addons` | ARO に標準搭載（有効化不要） |
+| ダッシュボード | Azure Portal の監視ブレード / Grafana（別途） | OpenShift Web コンソール（Observe） / 組み込み Grafana |
+| ログ集約 | Log Analytics ワークスペース | OpenShift Logging（EFK: Elasticsearch / Fluentd / Kibana）または Azure Monitor |
+| アラート | Azure Monitor アラートルール | Alertmanager + PrometheusRule |
+| コスト | Log Analytics インジェスト料金（GB 単位） | OpenShift 監視は追加コストなし |
+
+### 13.2 ログ確認コマンドの差異
+
+Pod ログの確認コマンドは `kubectl` → `oc` に置き換えるだけで同等。
+
+```bash
+# AKS
+kubectl logs -n "${NAMESPACE}" -l app=owl-web --tail=200 \
+  | grep -iE "error|exception|warn"
+
+kubectl logs -n "${NAMESPACE}" -l app=owl-agent --tail=100
+
+# ARO（コマンド以外は同一）
+oc logs -n "${OC_PROJECT}" -l app=owl-web --tail=200 \
+  | grep -iE "error|exception|warn"
+
+oc logs -n "${OC_PROJECT}" -l app=owl-agent --tail=100
+```
+
+### 13.3 メトリクス確認方法の差異
+
+**AKS（Container Insights / Log Analytics）:**
+
+```bash
+# Log Analytics クエリで Pod ステータスを確認
+az monitor log-analytics query \
+  --workspace "${LAW_NAME}" \
+  --analytics-query "
+    KubePodInventory
+    | where Namespace == '${NAMESPACE}'
+    | summarize count() by PodStatus
+  " \
+  --timespan PT1H
+
+# Azure Portal > AKS > 監視 > インサイト からも GUI で確認可
+```
+
+**ARO（OpenShift 組み込み Prometheus）:**
+
+```bash
+# Prometheus / Grafana の Route URL を取得
+oc get route -n openshift-monitoring
+
+# PromQL でメトリクスを確認（Web コンソール > Observe > Metrics）
+```
+
+PromQL クエリ例:
+
+```promql
+# DQ Web の CPU 使用率
+rate(container_cpu_usage_seconds_total{
+  namespace="collibra-dq", container="owl-web"}[5m])
+
+# DQ Agent のメモリ使用量
+container_memory_working_set_bytes{
+  namespace="collibra-dq", container="owl-agent"}
+
+# Spark Executor Pod が存在する間の Pod 数
+count(kube_pod_info{namespace="collibra-dq"}) by (pod)
+```
+
+### 13.4 アラート設定の差異
+
+**AKS（Azure Monitor アラートルール）:**
+
+```bash
+# Pod の再起動回数が閾値を超えたらアラート
+az monitor metrics alert create \
+  --name "dq-pod-restart-alert" \
+  --resource-group "${RG_NAME}" \
+  --scopes "/subscriptions/.../resourceGroups/.../providers/Microsoft.ContainerService/managedClusters/${AKS_NAME}" \
+  --condition "avg kube_pod_container_status_restarts_total > 5" \
+  --window-size 5m \
+  --evaluation-frequency 1m
+```
+
+**ARO（PrometheusRule）:**
+
+```yaml
+# oc apply でアラートルールを作成
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: collibra-dq-alerts
+  namespace: collibra-dq
+spec:
+  groups:
+    - name: collibra-dq
+      rules:
+        - alert: DQPodCrashLooping
+          expr: |
+            rate(kube_pod_container_status_restarts_total{
+              namespace="collibra-dq"}[5m]) > 0
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Collibra DQ Pod がクラッシュしています"
+```
+
+---
+
+## 14. トラブルシューティングの差異
+
+### 14.1 エラー一覧比較
+
+| 症状 | AKS | ARO | 対処法の差異 |
+|---|---|---|---|
+| `ImagePullBackOff` | ACR 未転送 / プルシークレット未設定 | 同左 + `oc secrets link` 未実施 | ARO は `oc secrets link default dq-pull-secret --for=pull` を追加で確認 |
+| Pod が `Pending` | ノードリソース不足 / PVC Pending | 同左 | コマンドが `kubectl describe` → `oc describe` |
+| PVC が `Pending` | StorageClass 未作成 / SMB の NFS 未対応 | **SMB StorageClass を使用している可能性（ARO）** | ARO は `protocol: nfs` を明示した StorageClass を使用しているか確認 |
+| `CrashLoopBackOff` | DB 接続失敗 / ライセンス不正 | 同左 | コマンドが `--previous` 付きログ確認（`kubectl` → `oc`） |
+| `OOMKilled` | Spark Executor のメモリ不足 | 同左 | `executor.memory` 増加（コマンドは共通） |
+| Ingress/Route の外部アクセス不可 | NGINX Controller Pod の起動失敗 | Route 設定ミス / Router Pod の問題 | AKS: `kubectl get pods -n ingress-nginx` / ARO: `oc get pods -n openshift-ingress` |
+| 502 Bad Gateway | DQ Web Pod 未起動 / Service ポート不一致 | 同左 | AKS は Ingress の backend 設定を確認 / ARO は Route の `spec.to.name` を確認 |
+| Spark ジョブ `FAILED` | RBAC 不足（Forbidden） | 同左 + **SCC 違反（ARO 固有）** | ARO は RBAC に加えて `oc adm policy who-can use scc/anyuid` で SCC も確認 |
+| **SCC 違反**（ARO 固有） | `dq-agent-sa` への SCC 付与漏れ | ARO のみ発生 | `oc adm policy add-scc-to-user anyuid -z dq-agent-sa -n ${OC_PROJECT}` |
+| **内部レジストリ認証失敗**（ARO 固有） | プッシュ権限不足 | ARO のみ発生 | `oc policy add-role-to-user registry-editor -z default` |
+
+### 14.2 デバッグコマンド対応表
+
+基本コマンドは `kubectl` → `oc` に読み替えるだけで動作する。ARO 固有コマンドを追加で覚える。
+
+| 操作 | AKS | ARO |
+|---|---|---|
+| Pod 一覧 | `kubectl get pods -n ${NAMESPACE} -o wide` | `oc get pods -n ${OC_PROJECT} -o wide` |
+| Pod 詳細 | `kubectl describe pod <POD> -n ${NAMESPACE}` | `oc describe pod <POD> -n ${OC_PROJECT}` |
+| ログ確認 | `kubectl logs <POD> -n ${NAMESPACE}` | `oc logs <POD> -n ${OC_PROJECT}` |
+| 直前のログ | `kubectl logs <POD> --previous` | `oc logs <POD> --previous` |
+| Pod 内シェル | `kubectl exec -it <POD> -- bash` | `oc exec -it <POD> -- bash` |
+| イベント確認 | `kubectl get events --sort-by='.lastTimestamp'` | `oc get events --sort-by='.lastTimestamp'` |
+| 全リソース確認 | `kubectl get all -n ${NAMESPACE}` | `oc get all -n ${OC_PROJECT}` |
+| **SCC 確認（ARO 固有）** | — | `oc adm policy who-can use scc/anyuid` |
+| **SCC 付与（ARO 固有）** | — | `oc adm policy add-scc-to-user anyuid -z <SA>` |
+| **SCC レビュー（ARO 固有）** | — | `oc adm policy scc-review -z <SA> --resource=pods` |
+| **Pod の SCC 確認（ARO 固有）** | — | `oc get pod -o jsonpath='{.metadata.annotations.openshift\.io/scc}'` |
+| Ingress/Route 確認 | `kubectl get ingress -n ${NAMESPACE}` | `oc get route -n ${OC_PROJECT}` |
+| Helm 状態確認 | `helm status ${HELM_RELEASE_NAME} -n ${NAMESPACE}` | `helm status ${HELM_RELEASE_NAME} -n ${OC_PROJECT}` |
+| Helm values 確認 | `helm get values ${HELM_RELEASE_NAME} -n ${NAMESPACE}` | `helm get values ${HELM_RELEASE_NAME} -n ${OC_PROJECT}` |
+
+### 14.3 SCC 違反のデバッグフロー（ARO 固有）
+
+```
+Pod が Pending / Error
+  │
+  ├─ oc describe pod <POD> -n ${OC_PROJECT}
+  │    └─ Events に "unable to validate against any security context constraint" ?
+  │         │
+  │         Yes
+  │         │
+  │         ├─ oc adm policy who-can use scc/anyuid | grep <SA>
+  │         │    └─ SA が含まれていない？
+  │         │         └─ oc adm policy add-scc-to-user anyuid -z <SA> -n ${OC_PROJECT}
+  │         │
+  │         └─ SCC は付与済みだが securityContext と競合している？
+  │              └─ custom-values.yaml の runAsUser を削除（ARO 自動割り当てに委譲）
+  │
+  └─ 別の原因（ImagePullBackOff / OOMKilled 等）→ 14.1 の対処法を参照
+```
+
+---
+
+*（続き：15〜16章は別途作成）*
