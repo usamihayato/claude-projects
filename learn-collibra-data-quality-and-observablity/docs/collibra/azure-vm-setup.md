@@ -1160,6 +1160,217 @@ sudo systemctl status collibra-dq
 各 Agent VM をデプロイ後、グループ会社の DQ Web UI（Admin Console → Agent Configuration）で  
 それぞれの Agent を登録し、担当する Datasource を重複しないよう割り当てること（11章参照）。
 
+### 9.5 オンデマンド起動パターン（推奨）
+
+#### 考え方
+
+DQ Agent はジョブ実行中のみ起動していればよい。ジョブ設定・結果参照は DQ Web と Metastore（グループ会社管理）だけで完結するため、**Agent VM は週1回のスキャン時間帯のみ起動**し、それ以外は Azure の **Deallocate（停止済み/割り当て解除）状態**に保つことで、コンピュート料金を大幅に削減できる。
+
+> **Deallocate と Stop の違い**:  
+> `az vm stop`（OS シャットダウン）はコンピュート料金が継続して発生する。  
+> `az vm deallocate` はコンピュート料金が停止する（ディスク料金のみ発生）。
+
+**コスト比較（Standard_E16s_v5・週1回スキャン想定）:**
+
+```
+【常時起動】
+  ¥179.96/hr × 730 hr/月 = ¥131,371/月（VM のみ）
+
+【オンデマンド起動】
+  起動時間の目安: 起動バッファ 0.5h + スキャン 4h + 停止バッファ 0.5h = 5h/回
+  月間稼働: 5h × 4.3回 = 約 22h/月
+  ¥179.96/hr × 22h = ¥3,959/月（VM のみ）
+
+VM コスト削減: ¥131,371 − ¥3,959 = ¥127,412/月（▲97%）
+ディスク料金（OS + データ）は Deallocate 中も発生: ¥10,075/月（変化なし）
+
+月額合計（オンデマンド）: ¥3,959 + ¥10,075 = ¥14,034/月
+```
+
+#### 前提：VM 起動時に DQ Agent が自動起動する設定
+
+9.3 で `sudo systemctl enable collibra-dq` を設定済みであれば、VM 起動時に DQ Agent と Spark が自動起動する。Runbook / Logic Apps から VM を起動するだけで Agent が稼働状態になる。
+
+---
+
+#### パターン A：Azure Automation Runbook（推奨）
+
+コード（PowerShell）でスケジュール実行・エラー時の自動停止まで制御できる最も柔軟な方法。
+
+**セットアップ手順:**
+
+```bash
+# 1. Automation Account の作成
+az automation account create \
+  --resource-group "${RG_NAME}" \
+  --name "aa-collibra-dq" \
+  --location "${LOCATION}" \
+  --sku Basic
+
+# 2. Automation Account にシステム割り当て Managed Identity を有効化
+az automation account update \
+  --resource-group "${RG_NAME}" \
+  --name "aa-collibra-dq" \
+  --assign-identity "[system]"
+
+# 3. Managed Identity の Principal ID を取得
+AA_PRINCIPAL_ID=$(az automation account show \
+  --resource-group "${RG_NAME}" \
+  --name "aa-collibra-dq" \
+  --query identity.principalId \
+  --output tsv)
+
+# 4. VM の起動・停止権限を付与（Virtual Machine Contributor）
+SUBSCRIPTION_SCOPE="/subscriptions/${SUBSCRIPTION_ID}/resourceGroups/${RG_NAME}"
+az role assignment create \
+  --assignee "${AA_PRINCIPAL_ID}" \
+  --role "Virtual Machine Contributor" \
+  --scope "${SUBSCRIPTION_SCOPE}"
+```
+
+**Runbook スクリプト（PowerShell）:**
+
+```powershell
+# DQ Agent VM オンデマンド起動・停止 Runbook
+# Azure Automation で週次スケジュール実行する
+
+param(
+    [string]$ResourceGroupName = "rg-collibra-dq",
+    [string]$VMName            = "vm-collibra-dq",
+    [int]$AgentStartupWaitSec  = 120,     # VM 起動後 Agent 安定待機（秒）
+    [int]$ScanDurationSec      = 14400    # スキャン所要時間の見込み（秒）= 4時間
+)
+
+# Managed Identity で Azure 認証
+Connect-AzAccount -Identity
+
+try {
+    Write-Output "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] VM 起動: $VMName"
+    Start-AzVM -ResourceGroupName $ResourceGroupName -Name $VMName
+    Write-Output "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] VM 起動完了"
+
+    Write-Output "DQ Agent 起動待機 (${AgentStartupWaitSec}秒)..."
+    Start-Sleep -Seconds $AgentStartupWaitSec
+
+    Write-Output "スキャン実行中... $($ScanDurationSec / 3600) 時間待機"
+    Start-Sleep -Seconds $ScanDurationSec
+
+    Write-Output "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] VM を deallocate: $VMName"
+    Stop-AzVM -ResourceGroupName $ResourceGroupName -Name $VMName -Force
+    Write-Output "完了"
+}
+catch {
+    Write-Error "エラー: $_"
+    # エラー時もコスト防止のため強制 deallocate
+    Stop-AzVM -ResourceGroupName $ResourceGroupName -Name $VMName -Force
+    throw
+}
+```
+
+**Runbook の登録とスケジュール設定:**
+
+```bash
+# Runbook を作成（PowerShell ファイルをアップロード）
+az automation runbook create \
+  --resource-group "${RG_NAME}" \
+  --automation-account-name "aa-collibra-dq" \
+  --name "Start-CollibraDQScan" \
+  --type PowerShell
+
+# スクリプトの内容を更新
+az automation runbook replace-content \
+  --resource-group "${RG_NAME}" \
+  --automation-account-name "aa-collibra-dq" \
+  --name "Start-CollibraDQScan" \
+  --content @/path/to/Start-CollibraDQScan.ps1
+
+# Runbook を発行
+az automation runbook publish \
+  --resource-group "${RG_NAME}" \
+  --automation-account-name "aa-collibra-dq" \
+  --name "Start-CollibraDQScan"
+
+# 週次スケジュールの作成（例: 毎週日曜 01:00 JST = 16:00 UTC）
+az automation schedule create \
+  --resource-group "${RG_NAME}" \
+  --automation-account-name "aa-collibra-dq" \
+  --name "weekly-sunday-0100jst" \
+  --frequency Week \
+  --interval 1 \
+  --start-time "2026-04-20T16:00:00+00:00" \
+  --time-zone "UTC"
+```
+
+> スケジュールと Runbook のリンクは Azure Portal（Automation Account → Runbook → スケジュール）から設定する。
+
+---
+
+#### パターン B：Azure Logic Apps（ノーコード）
+
+コードを書かずに設定できる簡易な方法。小規模・PoC 向け。
+
+**フロー設計:**
+
+```
+[Recurrence（毎週日曜 01:00）]
+    ↓
+[Azure VM を起動]（Connector: Azure VM）
+    ↓
+[遅延：2 分]（DQ Agent 起動待機）
+    ↓
+[遅延：4 時間]（スキャン実行待機）
+    ↓
+[Azure VM を停止（Deallocate）]
+```
+
+Azure Portal → Logic Apps → 新規作成 → トリガー「Recurrence」→ アクション「Start virtual machine」→「Delay」→「Deallocate virtual machine」の順で構成する。
+
+---
+
+#### パターン比較
+
+| 観点 | Automation Runbook | Logic Apps |
+|---|---|---|
+| 設定方法 | PowerShell コード | ノーコード（GUI） |
+| エラー時の自動停止 | ✓（try/catch で実装） | 別途エラーハンドリングが必要 |
+| スキャン完了の動的検知 | 拡張可能（API ポーリング追加） | 困難 |
+| コスト | 月500分まで無料（Basic） | 実行ごとに課金（~¥0.002/アクション） |
+| 推奨場面 | 本番・柔軟な制御が必要な場合 | PoC・簡易確認 |
+
+---
+
+#### 補足：スキャン完了を動的に検知する場合
+
+`ScanDurationSec` に固定値を設定するのではなく、グループ会社の DQ Web REST API でジョブ状態をポーリングして完了を検知することも可能。
+
+```powershell
+# スキャン完了をポーリングで検知する拡張例（PowerShell 追記部分）
+$DQWebHost  = "<グループ会社 DQ Web のホスト名>"
+$DQJobName  = "<監視対象のジョブ名>"
+$MaxWaitSec = 21600   # 最大 6 時間待機
+$PollSec    = 300     # 5 分ごとにポーリング
+$elapsed    = 0
+
+while ($elapsed -lt $MaxWaitSec) {
+    Start-Sleep -Seconds $PollSec
+    $elapsed += $PollSec
+
+    $response = Invoke-RestMethod `
+        -Uri "https://${DQWebHost}:9000/dq/api/v1/jobs?jobName=${DQJobName}" `
+        -Method Get `
+        -Headers @{ Authorization = "Bearer <TOKEN>" }
+
+    $latestStatus = $response | Sort-Object -Property startTime -Descending | Select-Object -First 1
+
+    Write-Output "[$elapsed 秒経過] ジョブ状態: $($latestStatus.status)"
+
+    if ($latestStatus.status -in @("PASSED", "FAILED", "ALERT")) {
+        Write-Output "ジョブ完了: $($latestStatus.status)"
+        break
+    }
+}
+```
+
 ---
 
 ## 10. ネットワーク・外部アクセスの設定
