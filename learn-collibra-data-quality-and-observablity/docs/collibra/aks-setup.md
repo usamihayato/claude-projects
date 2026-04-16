@@ -374,19 +374,98 @@ dq-pull-secret    kubernetes.io/dockerconfigjson   1      5s
 
 ## 4. Helm チャートの準備
 
-> **背景**: Collibra DQ は Helm チャート形式で配布される。チャートは Collibra ライセンスメール経由で ZIP ファイルとして提供される。
+> **背景**: Collibra DQ は Helm チャート形式で配布される。チャートは Collibra ライセンスメール経由で ZIP ファイルとして提供される。Helm を使うことで、テンプレート化された Kubernetes マニフェストをパラメータ指定だけでデプロイできる。
 
 ### 4.1 Helm チャートの入手方法
 
-ライセンスメールに記載のダウンロードリンクから ZIP ファイルを取得し、管理用 VM に展開する。
+ライセンスメールに記載のダウンロードリンクから ZIP ファイルを管理用 VM に取得し、展開する。
+
+```bash
+# ダウンロード（URL はライセンスメールに記載）
+wget -O collibra-dq-chart.zip "<ライセンスメール記載のダウンロードURL>"
+
+# 展開先ディレクトリを作成して解凍
+mkdir -p "${CHART_PATH}"
+unzip collibra-dq-chart.zip -d "${CHART_PATH}"
+
+# 展開されたディレクトリを確認
+ls -l "${CHART_PATH}"
+```
 
 ### 4.2 チャートディレクトリ構造の確認
 
-展開したチャートのディレクトリ構造・主要ファイル（`Chart.yaml`、`values.yaml`、`templates/`）を確認する。
+展開後のディレクトリ構造を確認する。
+
+```bash
+find "${CHART_PATH}" -maxdepth 3 | sort
+```
+
+**典型的なチャート構造:**
+
+```
+collibra-dq-chart/
+├── Chart.yaml          # チャートのメタ情報（名前・バージョン・依存関係）
+├── values.yaml         # デフォルト設定値（カスタマイズの起点）
+├── templates/          # Kubernetes マニフェストテンプレート群
+│   ├── deployment-web.yaml
+│   ├── deployment-agent.yaml
+│   ├── service-web.yaml
+│   ├── pvc-web.yaml
+│   ├── rbac.yaml
+│   └── ...
+└── charts/             # 依存サブチャート（metastore 等）
+```
+
+```bash
+# Chart.yaml でチャートバージョンと対応 DQ バージョンを確認
+cat "${CHART_PATH}/Chart.yaml"
+
+# values.yaml の全内容を確認（カスタマイズ前の参照用）
+cat "${CHART_PATH}/values.yaml"
+```
 
 ### 4.3 values.yaml 設定パラメータ一覧
 
-カスタマイズが必要な主要パラメータ（バージョン、ライセンス、ストレージクラス、サービスタイプ等）を一覧化する。
+カスタマイズが必要な主要パラメータを以下に示す。実際の値は 9 章のデプロイ時に `--set` または独自の `custom-values.yaml` で指定する。
+
+#### グローバル設定
+
+| パラメータ | 説明 | 設定例 |
+|---|---|---|
+| `global.version.dq` | Collibra DQ のバージョン | `"2026.02"` |
+| `global.version.spark` | Spark のバージョン | `"4.1.0"` |
+| `global.image.repo` | コンテナイメージのリポジトリパス | `"acrcollibradq.azurecr.io/collibra"` |
+| `global.configMap.data.license_key` | ライセンスキー | `"<license_key>"` |
+| `global.configMap.data.license_name` | ライセンス名 | `"<license_name>"` |
+
+#### DQ Web 設定
+
+| パラメータ | 説明 | 設定例 |
+|---|---|---|
+| `global.web.admin.email` | 管理者メールアドレス | `"admin@example.com"` |
+| `global.web.admin.password` | 管理者パスワード | `"<password>"` |
+| `global.web.service.type` | サービスタイプ | `"ClusterIP"`（Ingress 使用時）|
+| `global.web.tls.enabled` | HTTPS 有効化 | `true` |
+
+#### ストレージ設定
+
+| パラメータ | 説明 | 設定例 |
+|---|---|---|
+| `global.persistence.web.storageClassName` | DQ Web 用ストレージクラス | `"azurefile-csi"` |
+| `spark_scratch_type` | Spark 作業領域のタイプ | `"persistentVolumeClaim"` |
+| `spark_scratch_storage_class` | Spark PVC 用ストレージクラス | `"azurefile-csi"` |
+| `spark_scratch_storage_size` | Spark PVC サイズ | `"20Gi"` |
+
+#### メタストア設定
+
+| パラメータ | 説明 | 設定例 |
+|---|---|---|
+| `global.metastore.host` | PostgreSQL ホスト名 | `"<host>.postgres.database.azure.com"` |
+| `global.metastore.port` | PostgreSQL ポート番号 | `"5432"` |
+| `global.metastore.db` | データベース名 | `"owlmetastore"` |
+| `global.metastore.user` | DB ユーザー名 | `"<user>"` |
+
+> **注意**: パスワードや秘密情報は `--set` でコマンドラインに直接渡すとシェル履歴に残る。6章で説明する Kubernetes Secret または Azure Key Vault 経由での受け渡しを推奨する。
 
 ---
 
