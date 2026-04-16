@@ -41,17 +41,72 @@
 
 ### 1.1 ドキュメントの目的と範囲
 
-本ドキュメントは、Azure Red Hat OpenShift (ARO) 上に Collibra DQ をデプロイするための詳細なセットアップ手順を記載する。
+本ドキュメントは、Azure Red Hat OpenShift (ARO) 上に Collibra DQ (Data Quality) をデプロイするための詳細なセットアップ手順を記載する。
 
-対象範囲はアプリケーション層のセットアップに限定し、ARO クラスター自体の構築手順は含まない。
+**対象読者**: ARO / OpenShift の基本操作（`oc` コマンド・Helm）を理解しているインフラエンジニア・システムエンジニア
 
-### 1.2 前提条件（ARO 基盤構築済み前提）
+**対象範囲**:
 
-本手順を実施する前に、以下が完了していることを確認すること。
+| スコープ | 本ドキュメントの扱い |
+|---|---|
+| ARO クラスター構築（VNET / ノードプール等） | 対象外 |
+| Collibra DQ アプリケーションのデプロイ・設定 | **対象** |
+| DQ Agent の接続・Spark 設定 | **対象** |
+| Collibra DQ の日常運用・監視 | 一部対象（動作確認・アップグレードのみ） |
+
+**デプロイ対象コンポーネント**:
+
+| コンポーネント | 役割 |
+|---|---|
+| DQ Web | Web UI / REST API サーバー（ポート 9000） |
+| DQ Agent | Spark ジョブ実行エンジン（ポート 9101） |
+| Spark | データ品質チェック処理基盤（Executor Pod として動的生成） |
+
+### 1.2 前提条件
+
+本手順を実施する前に、以下がすべて完了していることを確認すること。
+
+#### インフラ層（ARO クラスター構築済み）
+
+| 項目 | 確認方法 |
+|---|---|
+| ARO クラスターが Running 状態 | `az aro show -g <RG> -n <ARO_NAME> --query provisioningState` |
+| Worker ノードが Ready 状態（3台以上） | `oc get nodes` |
+| `oc` CLI がインストール済み・ログイン可能 | `oc whoami` |
+| ACR または OpenShift 内部レジストリが利用可能 | `oc get route default-route -n openshift-image-registry` |
+| Azure Database for PostgreSQL（外部メタストア）が起動済み | Azure Portal または az コマンドで確認 |
+| Private Endpoint 経由で metastore に疎通可能 | `nc -zv <host> 5432` |
+
+#### ライセンス・認証情報（Collibra 社から取得済み）
+
+| 項目 | 取得先 |
+|---|---|
+| ライセンスキー（`license_key`） | Collibra ライセンスメール |
+| ライセンス名（`license_name`） | Collibra ライセンスメール |
+| コンテナイメージ取得用認証情報 | Collibra ライセンスメール |
+| Helm チャート ZIP のダウンロード URL | Collibra ライセンスメール |
+
+#### バージョン要件
+
+| ソフトウェア | 要件 | 本環境の値 |
+|---|---|---|
+| Collibra DQ | 2026.02 | 2026.02 |
+| Spark | 4.1.0（DQ 2026.02 必須） | 4.1.0 |
+| Java | 17（コンテナ内蔵） | 17 |
+| OpenShift | 4.12 以上推奨 | 4.x |
+| Helm | v3 以上 | v3.x |
+| PostgreSQL | 13 以上 | Azure DB for PostgreSQL Flexible Server |
 
 ### 1.3 関連ドキュメント一覧
 
-AKS 版（`aks-setup.md`）との対応関係を含めて記載する。
+| ドキュメント | 内容 | AKS 版との対応 |
+|---|---|---|
+| `docs/collibra/report.md` | Collibra DQ 製品概要・システム要件 | 共通 |
+| `docs/collibra/deployment-comparison.md` | デプロイ構成比較 | 共通 |
+| `docs/collibra/aks-setup.md` | AKS 版セットアップ手順 | **本ドキュメントの対応版** |
+| `docs/kubernetes/aks-design.md` | AKS 設計書（参考） | AKS のみ |
+| `docs/kubernetes/aks-build.md` | AKS 基盤構築手順（参考） | AKS のみ |
+| `docs/kubernetes/helm.md` | Helm 基礎知識 | 共通 |
 
 ---
 
