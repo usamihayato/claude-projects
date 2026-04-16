@@ -512,4 +512,300 @@ global:
 
 ---
 
-*（後半：8〜16章は別途作成）*
+## 8. 認証・シークレット管理
+
+### 8.1 シークレット一覧と管理コマンドの差異
+
+作成するシークレットの種類は AKS / ARO で同一。コマンドが `kubectl` → `oc` に変わるだけ。
+
+| シークレット名 | 内容 | AKS | ARO |
+|---|---|---|---|
+| `dq-pull-secret` | ACR 認証情報 | `kubectl create secret docker-registry` | `oc create secret docker-registry` + `oc secrets link` |
+| `dq-license-secret` | ライセンスキー | `kubectl create secret generic` | `oc create secret generic` |
+| `dq-metastore-secret` | メタストア DB パスワード | 同上 | 同上 |
+| `dq-admin-secret` | DQ Web 管理者パスワード | 同上 | 同上 |
+
+**AKS との最大の差異**: ARO では `oc secrets link` で ServiceAccount にプルシークレットを明示的に紐付けないとイメージプルが失敗する。
+
+```bash
+# AKS: プルシークレット作成のみで済む
+kubectl create secret docker-registry dq-pull-secret \
+  --docker-server="${ACR_LOGIN_SERVER}" \
+  --docker-username="${ACR_SP_ID}" \
+  --docker-password="${ACR_SP_SECRET}" \
+  -n "${NAMESPACE}"
+
+# ARO: 作成後に ServiceAccount へ明示的に紐付けが必要
+oc create secret docker-registry dq-pull-secret \
+  --docker-server="${ACR_LOGIN_SERVER}" \
+  --docker-username="${ACR_SP_ID}" \
+  --docker-password="${ACR_SP_SECRET}" \
+  -n "${OC_PROJECT}"
+
+oc secrets link default dq-pull-secret --for=pull -n "${OC_PROJECT}"  # ARO 固有
+```
+
+### 8.2 Azure Key Vault CSI ドライバーの有効化方法
+
+Kubernetes Secret を使用せず Azure Key Vault で機密情報を集中管理する場合、有効化の方法が異なる。
+
+| 観点 | AKS | ARO |
+|---|---|---|
+| 有効化方法 | `az aks enable-addons`（1コマンド） | Helm で手動インストール |
+| マネージドの度合い | AKS アドオンとして自動更新 | Helm リリースとして自分で更新管理 |
+| SecretProviderClass YAML | 共通（内容は同一） | 共通（内容は同一） |
+
+**AKS（アドオン有効化）:**
+
+```bash
+az aks enable-addons \
+  --resource-group "${RG_NAME}" \
+  --name "${AKS_NAME}" \
+  --addons azure-keyvault-secrets-provider
+```
+
+**ARO（Helm インストール）:**
+
+```bash
+helm repo add secrets-store-csi-driver \
+  https://kubernetes-sigs.github.io/secrets-store-csi-driver/charts
+helm upgrade --install csi-secrets-store \
+  secrets-store-csi-driver/secrets-store-csi-driver \
+  --namespace kube-system \
+  --set syncSecret.enabled=true
+
+helm repo add csi-secrets-store-provider-azure \
+  https://azure.github.io/secrets-store-csi-driver-provider-azure/charts
+helm upgrade --install azure-csi-provider \
+  csi-secrets-store-provider-azure/csi-secrets-store-provider-azure \
+  --namespace kube-system
+```
+
+### 8.3 Workload Identity の設定差異
+
+Azure AD Workload Identity を使用してパスワードレス認証を行う場合、OIDC 発行者 URL の取得方法が異なる。
+
+| 観点 | AKS | ARO |
+|---|---|---|
+| OIDC 有効化 | `az aks update --enable-oidc-issuer` | ARO は標準で OIDC を提供（有効化不要） |
+| OIDC URL 取得 | `az aks show --query oidcIssuerProfile.issuerUrl` | `oc get authentication.config.openshift.io cluster -o jsonpath='{.spec.serviceAccountIssuer}'` |
+| フェデレーション subject | `system:serviceaccount:${NAMESPACE}:collibra-dq-sa` | `system:serviceaccount:${OC_PROJECT}:collibra-dq-sa` |
+| SA へのアノテーション | `kubectl annotate serviceaccount` | `oc annotate serviceaccount` |
+
+```bash
+# AKS: OIDC 発行者 URL 取得
+OIDC_ISSUER=$(az aks show \
+  --resource-group "${RG_NAME}" --name "${AKS_NAME}" \
+  --query "oidcIssuerProfile.issuerUrl" -o tsv)
+
+# ARO: OIDC 発行者 URL 取得（組み込みのため az コマンド不要）
+OIDC_ISSUER=$(oc get authentication.config.openshift.io cluster \
+  -o jsonpath='{.spec.serviceAccountIssuer}')
+```
+
+フェデレーション ID 資格情報の作成コマンドは両者ほぼ同一。`--subject` の namespace 部分のみ異なる（`${NAMESPACE}` vs `${OC_PROJECT}`）。
+
+---
+
+## 9. SSL/TLS 設定
+
+### 9.1 TLS 終端アーキテクチャの違い
+
+AKS と ARO では TLS を終端する場所と設定箇所が根本的に異なる。
+
+```
+【AKS】
+クライアント
+  │ HTTPS
+  ▼
+NGINX Ingress Controller（TLS 終端）
+  │ HTTP または HTTPS（backend-protocol に依存）
+  ▼
+DQ Web Pod（Service: ClusterIP）
+
+【ARO: Edge termination（推奨）】
+クライアント
+  │ HTTPS
+  ▼
+OpenShift Router（TLS 終端）
+  │ HTTP（平文）
+  ▼
+DQ Web Pod（Service: ClusterIP）
+
+【ARO: Re-encrypt termination】
+クライアント
+  │ HTTPS
+  ▼
+OpenShift Router（Route 証明書で終端）
+  │ HTTPS（再暗号化）
+  ▼
+DQ Web Pod（JKS 証明書で終端）
+```
+
+### 9.2 Java Keystore（JKS）が必要なケース
+
+| シナリオ | AKS | ARO |
+|---|---|---|
+| Ingress / Route で TLS を終端 | JKS 不要（Ingress が証明書を処理） | Edge termination なら JKS 不要 |
+| アプリまで E2E 暗号化 | NGINX の `backend-protocol: HTTPS` + JKS 必要 | Re-encrypt / Passthrough + JKS 必要 |
+| 検証環境 | HTTP Ingress でも可 | `oc expose svc` の自動 Route URL で代替可 |
+
+> **ARO の優位点**: Edge termination を採用すれば、DQ Web Pod 側の TLS 設定（JKS 作成・Secret 登録）が不要になる。AKS でも NGINX TLS termination で同様にできるが、設定が Route より煩雑になる。
+
+### 9.3 TLS 設定の構成要素比較
+
+**AKS（NGINX Ingress での TLS termination）:**
+
+```yaml
+# 7章で作成した TLS Secret を Ingress で参照
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: dq-web-ingress
+  annotations:
+    nginx.ingress.kubernetes.io/backend-protocol: "HTTP"   # Edge 相当
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - dq.example.internal
+      secretName: dq-ssl-secret       # type: kubernetes.io/tls の Secret
+  rules:
+    - host: dq.example.internal
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: collibra-dq-web
+                port:
+                  number: 9000
+```
+
+**ARO（Route Edge termination）:**
+
+```yaml
+# CA 署名済み証明書を Route に直接埋め込む（Secret 参照は不要）
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: dq-web-route
+spec:
+  host: dq.example.internal
+  to:
+    kind: Service
+    name: collibra-dq-web
+  port:
+    targetPort: 9000
+  tls:
+    termination: edge               # Route が TLS を終端
+    certificate: |
+      -----BEGIN CERTIFICATE-----
+      <PEM 証明書>
+      -----END CERTIFICATE-----
+    key: |
+      -----BEGIN PRIVATE KEY-----
+      <PEM 秘密鍵>
+      -----END PRIVATE KEY-----
+    insecureEdgeTerminationPolicy: Redirect   # HTTP → HTTPS リダイレクト
+```
+
+### 9.4 証明書の Secret 形式の差異
+
+| 観点 | AKS（Ingress 用） | ARO（Route 用） |
+|---|---|---|
+| Secret タイプ | `kubernetes.io/tls` | Route に PEM を直接記載（Secret 参照不可） |
+| 証明書フォーマット | PEM（tls.crt / tls.key） | PEM（Route YAML に inline で記載） |
+| 中間 CA の扱い | `tls.crt` に連結して記載 | `caCertificate` フィールドに別記 |
+| 証明書のローテーション | Secret を更新 → Ingress が自動反映 | Route を更新（`oc edit route` または `oc apply`） |
+
+---
+
+## 10. 外部アクセス（Ingress vs Route）
+
+### 10.1 仕組みの根本的な差異
+
+| 観点 | AKS: NGINX Ingress | ARO: OpenShift Route |
+|---|---|---|
+| 導入方法 | Helm で別途インストール必要 | ARO に組み込み済み（インストール不要） |
+| 実装 | NGINX（OSS / Ingress-NGINX） | HAProxy（OpenShift Router） |
+| API リソース | `networking.k8s.io/v1 Ingress` | `route.openshift.io/v1 Route` |
+| TLS 設定場所 | Ingress `spec.tls` + Secret | Route `spec.tls`（inline PEM） |
+| ホスト名自動割り当て | なし（手動で hosts 指定） | あり（`<route>.<project>.<cluster-domain>` 形式） |
+| HTTP→HTTPS リダイレクト | `nginx.ingress.kubernetes.io/ssl-redirect: "true"` アノテーション | `insecureEdgeTerminationPolicy: Redirect` |
+| タイムアウト設定 | `nginx.ingress.kubernetes.io/proxy-read-timeout` アノテーション | `haproxy.router.openshift.io/timeout` アノテーション |
+| WebSocket サポート | アノテーションで有効化 | デフォルトで有効 |
+
+### 10.2 セットアップ手順の比較
+
+**AKS: NGINX Ingress コントローラーのインストール（別途必要）:**
+
+```bash
+# Step 1: Helm リポジトリ追加・インストール
+helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx
+helm upgrade --install ingress-nginx ingress-nginx/ingress-nginx \
+  --namespace ingress-nginx \
+  --create-namespace \
+  --set controller.service.annotations."service\.beta\.kubernetes\.io/azure-load-balancer-internal"=true \
+  --set controller.replicaCount=2 \
+  --wait
+
+# Step 2: Internal LoadBalancer の IP 取得
+INGRESS_IP=$(kubectl get svc ingress-nginx-controller \
+  -n ingress-nginx \
+  -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+
+# Step 3: Ingress リソース作成
+kubectl apply -f dq-web-ingress.yaml -n "${NAMESPACE}"
+```
+
+**ARO: Route のみ作成（インストール不要）:**
+
+```bash
+# Step 1: デフォルトドメイン確認（インストール作業なし）
+oc get ingresses.config.openshift.io cluster -o jsonpath='{.spec.domain}'
+
+# Step 2: Route リソース作成のみ
+oc apply -f dq-web-route.yaml -n "${OC_PROJECT}"
+
+# Step 3: 自動割り当てされた URL を確認
+oc get route dq-web-route -n "${OC_PROJECT}" -o jsonpath='{.spec.host}'
+```
+
+### 10.3 設定 YAML の対応関係
+
+| 設定項目 | AKS（Ingress） | ARO（Route） |
+|---|---|---|
+| ホスト名 | `spec.rules[].host` | `spec.host` |
+| バックエンド Service | `spec.rules[].http.paths[].backend.service.name` | `spec.to.name` |
+| バックエンドポート | `spec.rules[].http.paths[].backend.service.port.number` | `spec.port.targetPort` |
+| TLS 有効化 | `spec.tls[].secretName` | `spec.tls.termination: edge` |
+| TLS 証明書 | Secret（`kubectl create secret tls`） | Route YAML に inline 記載 |
+| HTTP リダイレクト | `nginx.ingress.kubernetes.io/ssl-redirect: "true"` | `spec.tls.insecureEdgeTerminationPolicy: Redirect` |
+| タイムアウト（例: 1時間） | `nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"` | `haproxy.router.openshift.io/timeout: "1h"` |
+
+### 10.4 DNS 設定の差異
+
+**AKS:**
+```
+# Ingress Controller の Internal LoadBalancer IP に A レコードを登録
+dq.example.internal  A  10.1.x.x（INGRESS_IP）
+```
+
+**ARO:**
+```
+# Router の IP に A レコード、またはデフォルトドメインに CNAME を設定
+dq.example.internal  CNAME  router-default.apps.aro-xxx.japaneast.aroapp.io
+
+# または Router の外部 IP を直接指定
+ROUTER_IP=$(oc get svc router-default -n openshift-ingress \
+  -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+# dq.example.internal  A  ${ROUTER_IP}
+```
+
+> **ARO の優位点**: デフォルトドメインを使用する場合、DNS 登録不要で即座に `https://<route名>-<project名>.apps.<cluster-domain>/` の URL が利用可能になる。社内 DNS への依頼待ち時間なしで動作確認できる。
+
+---
+
+*（続き：11〜16章は別途作成）*
