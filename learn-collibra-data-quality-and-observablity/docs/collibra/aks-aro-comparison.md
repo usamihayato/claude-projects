@@ -1165,4 +1165,186 @@ Pod が Pending / Error
 
 ---
 
-*（続き：15〜16章は別途作成）*
+## 15. アップグレード手順の差異
+
+### 15.1 手順の全体フロー比較
+
+`helm upgrade` コマンド本体と Helm チャートの取得手順は完全に共通。差異はイメージ転送先とローリングアップデート確認コマンドのみ。
+
+| ステップ | AKS | ARO |
+|---|---|---|
+| 1. バックアップ | `helm get values ... -n ${NAMESPACE}` / `pg_dump` | `helm get values ... -n ${OC_PROJECT}` / `pg_dump` |
+| 2. イメージ転送 | ACR のみ | **ACR または OpenShift 内部レジストリ**（2択） |
+| 3. Helm チャート取得 | `wget` + `unzip`（共通） | 同左 |
+| 4. values バージョン更新 | `sed -i` で `custom-values.yaml` を更新 | `sed -i` で `custom-values-aro.yaml` を更新 |
+| 5. `helm upgrade` | `--namespace "${NAMESPACE}"` | `--namespace "${OC_PROJECT}"` |
+| 6. ローリング確認 | `kubectl rollout status` | `oc rollout status` |
+| 7. ロールバック | `helm rollback` + `kubectl rollout status` | `helm rollback` + `oc rollout status` |
+
+### 15.2 イメージ転送の差異
+
+ARO のみ内部レジストリへの転送パターンが追加される。
+
+**AKS（ACR のみ）:**
+
+```bash
+az acr login --name "${ACR_NAME}"
+for IMG in owl-web owl-agent; do
+  docker tag  "${COLLIBRA_REGISTRY}/${IMG}:${NEW_DQ_VERSION}" \
+              "${ACR_LOGIN_SERVER}/collibra/${IMG}:${NEW_DQ_VERSION}"
+  docker push "${ACR_LOGIN_SERVER}/collibra/${IMG}:${NEW_DQ_VERSION}"
+done
+```
+
+**ARO（ACR または内部レジストリ）:**
+
+```bash
+# パターン A: ACR へ転送（AKS と同一）
+az acr login --name "${ACR_NAME}"
+for IMG in owl-web owl-agent; do
+  docker tag  "${COLLIBRA_REGISTRY}/${IMG}:${NEW_DQ_VERSION}" \
+              "${ACR_LOGIN_SERVER}/collibra/${IMG}:${NEW_DQ_VERSION}"
+  docker push "${ACR_LOGIN_SERVER}/collibra/${IMG}:${NEW_DQ_VERSION}"
+done
+
+# パターン B: OpenShift 内部レジストリへ転送（ARO 固有）
+INTERNAL_REGISTRY=$(oc get route default-route \
+  -n openshift-image-registry -o jsonpath='{.spec.host}')
+docker login "${INTERNAL_REGISTRY}" -u "$(oc whoami)" -p "$(oc whoami -t)"
+for IMG in owl-web owl-agent; do
+  docker tag  "${COLLIBRA_REGISTRY}/${IMG}:${NEW_DQ_VERSION}" \
+              "${INTERNAL_REGISTRY}/${OC_PROJECT}/${IMG}:${NEW_DQ_VERSION}"
+  docker push "${INTERNAL_REGISTRY}/${OC_PROJECT}/${IMG}:${NEW_DQ_VERSION}"
+done
+```
+
+### 15.3 ローリングアップデート確認コマンドの差異
+
+```bash
+# AKS
+kubectl rollout status deployment/collibra-dq-web  -n "${NAMESPACE}"
+kubectl rollout status deployment/collibra-dq-agent -n "${NAMESPACE}"
+
+# ARO（oc に置き換えるだけ）
+oc rollout status deployment/collibra-dq-web  -n "${OC_PROJECT}"
+oc rollout status deployment/collibra-dq-agent -n "${OC_PROJECT}"
+```
+
+### 15.4 ロールバックコマンドの差異
+
+```bash
+# AKS
+helm rollback "${HELM_RELEASE_NAME}" 1 --namespace "${NAMESPACE}" --wait
+kubectl rollout status deployment/collibra-dq-web -n "${NAMESPACE}"
+
+# ARO
+helm rollback "${HELM_RELEASE_NAME}" 1 --namespace "${OC_PROJECT}" --wait
+oc rollout status deployment/collibra-dq-web -n "${OC_PROJECT}"
+```
+
+> **共通の注意点**: ロールバック後にメタストアのスキーマが新バージョンで変更されていると旧バージョンと互換性がない場合がある。Collibra のリリースノートでスキーママイグレーションの有無を事前に確認すること。
+
+---
+
+## 16. 採用判断フロー
+
+### 16.1 総合比較サマリー
+
+本ドキュメント全体の差異を「導入コスト」「運用コスト」「セキュリティ」「既存環境との親和性」の4観点で評価する。
+
+| 評価観点 | AKS | ARO | 備考 |
+|---|---|---|---|
+| **初期構築の難易度** | ★★☆ 中 | ★★★ 高 | ARO は SCC・Route・内部レジストリ等の追加設定が必要 |
+| **必要な追加知識** | Kubernetes + Azure | Kubernetes + Azure + OpenShift / RHEL | ARO は OpenShift 固有の概念（SCC・Route・Project）の習得が必要 |
+| **月額コスト** | 低〜中 | 中〜高（RHEL + OCP ライセンス込み） | ARO は AKS の 1.5〜2 倍程度が目安 |
+| **サポート体制** | Microsoft のみ | Microsoft + Red Hat 共同 | ARO は OpenShift 問題を Red Hat に問い合わせ可能 |
+| **セキュリティ機能** | PSA（3段階）+ Azure Policy | SCC（細粒度）+ OpenShift Security | ARO の SCC は細粒度設定が可能だが設定コストも高い |
+| **外部アクセス設定** | NGINX インストール必要 | Route が標準搭載（インストール不要） | ARO は Ingress Controller 管理が不要 |
+| **監視基盤** | Container Insights（別途設定） | Prometheus/Grafana（標準搭載） | ARO は追加コストなしで監視スタックを利用可能 |
+| **Web コンソール** | Azure Portal（クラウド管理UI） | OpenShift Web コンソール（Kubernetes 操作 UI） | ARO は Pod・ログ・メトリクスをブラウザで直接操作可能 |
+| **Collibra DQ の互換性** | 完全サポート | 完全サポート | 両者とも公式サポート対象 |
+| **IaC / GitOps 親和性** | Helm + Azure Bicep / Terraform | Helm + ArgoCD / OpenShift GitOps | ARO は GitOps ワークフローが標準機能として充実 |
+
+### 16.2 採用判断フロー
+
+```
+START: Collibra DQ を Azure Kubernetes 基盤にデプロイする
+  │
+  Q1: 組織内に既存の OpenShift / ARO 環境があるか？
+  │
+  ├─ YES ──▶ 既存 ARO 環境に相乗りできるか確認
+  │               │
+  │               ├─ YES ──▶ ★ ARO を選択（既存インフラ活用）
+  │               └─ NO  ──▶ Q2 へ
+  │
+  └─ NO ──▶ Q2 へ
+        │
+        Q2: Red Hat / OpenShift の運用経験がチームにあるか？
+        │
+        ├─ YES ──▶ Q3 へ
+        └─ NO  ──▶ ★ AKS を選択（学習コスト最小）
+              │
+              Q3: 以下の要件が1つ以上あるか？
+              │   ・Red Hat サポートを利用したい
+              │   ・OpenShift の Web コンソール・GitOps を活用したい
+              │   ・SCC による細粒度のセキュリティ制御が必要
+              │   ・RHEL ベースの OS が組織要件（セキュリティ基準等）
+              │
+              ├─ YES ──▶ ★ ARO を選択
+              └─ NO  ──▶ Q4 へ
+                    │
+                    Q4: コスト最優先か？
+                    │
+                    ├─ YES ──▶ ★ AKS を選択（ARO 比 1.5〜2 倍安価）
+                    └─ NO  ──▶ ★ AKS を選択（デフォルト推奨）
+```
+
+### 16.3 シナリオ別推奨まとめ
+
+| シナリオ | 推奨 | 主な理由 |
+|---|---|---|
+| Azure ネイティブで新規構築。OpenShift 経験なし | **AKS** | 学習コスト・運用コスト・金額コストすべて低い |
+| 社内に既存 ARO クラスターがある | **ARO（既存活用）** | 新規クラスター不要。インフラ費用を抑制できる |
+| Red Hat サポートを利用したい | **ARO** | OpenShift 問題を Red Hat に問い合わせ可能 |
+| OpenShift の SCC で細粒度セキュリティ制御が必要 | **ARO** | PSA より柔軟な SCC を活用可能 |
+| 監視・GitOps を標準搭載で使いたい | **ARO** | Prometheus・Grafana・ArgoCD が組み込み済み |
+| コスト最優先（PoC / 小規模本番） | **AKS** | ARO より 1.5〜2 倍安価。必要十分な機能を提供 |
+| 将来 AWS/GCP への移植可能性を残したい | **AKS** | CNCF 準拠の標準 Kubernetes。EKS/GKE との差異最小 |
+| RHEL ベース OS が組織のセキュリティ要件 | **ARO** | ノード OS が RHEL（ARO は RHCOS）で統一可能 |
+
+### 16.4 本プロジェクトへの適用
+
+本プロジェクト（Azure Hub-Spoke 構成・DQ Agent + Spark のみ・OpenShift 経験なし）に対する推奨:
+
+> **AKS による構築を推奨する。**
+
+| 判断根拠 | 内容 |
+|---|---|
+| Azure 基盤との親和性 | Hub-Spoke / Private Endpoint / Managed Identity がそのまま利用可能 |
+| OpenShift 経験不要 | SCC・Route・Project 等の追加概念の習得が不要 |
+| コスト効率 | ARO 比で約 1.5〜2 倍安価 |
+| 将来の移植性 | 標準 Kubernetes のため EKS/GKE への移植が容易 |
+| 運用の自動化 | AKS ノードの自動アップグレード・Container Insights との統合が容易 |
+
+ただし、以下に該当する場合は ARO への移行または ARO での新規構築を再検討すること:
+
+- 組織内で ARO / OpenShift の標準化が決定された場合
+- Red Hat サポートが契約要件になった場合
+- OpenShift の細粒度 SCC によるセキュリティポリシー適用が必須になった場合
+
+---
+
+## 付録: 変数名・設定値の対応表
+
+各ドキュメントで使用している変数名と値の対応を整理する。
+
+| 変数 | AKS（aks-setup.md） | ARO（aro-setup.md） | 備考 |
+|---|---|---|---|
+| クラスター名変数 | `AKS_NAME=aks-collibra-dq` | `ARO_NAME=aro-collibra-dq` | |
+| 名前空間変数 | `NAMESPACE=collibra-dq` | `OC_PROJECT=collibra-dq` | 値は同一 |
+| Helm 名前空間指定 | `--namespace "${NAMESPACE}"` | `--namespace "${OC_PROJECT}"` | |
+| values ファイル名 | `custom-values.yaml` | `custom-values-aro.yaml` | |
+| ロールアウト確認 | `kubectl rollout status` | `oc rollout status` | |
+| リソース確認コマンド | `kubectl get pod,svc,pvc,ingress` | `oc get pod,svc,pvc,route` | `ingress` → `route` |
+| イメージレジストリ | ACR（`${ACR_LOGIN_SERVER}`） | ACR または内部レジストリ | |
+| ノード選択キー | `agentpool: dqpool` | `node-role.kubernetes.io/worker: ""` | |
