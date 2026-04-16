@@ -640,21 +640,219 @@ dq-jdbc-drivers-pvc    Bound    pvc-zzz    5Gi        RWX            azurefile-c
 
 ## 6. 認証・シークレットの設定
 
-### 6.1 イメージプルシークレット登録
+> **背景**: ライセンスキー・DB パスワード・管理者パスワード等の機密情報をコマンドラインや values.yaml に平文で記載しないよう、Kubernetes Secret または Azure Key Vault で管理する。
 
-Helm デプロイ時に使用するイメージプルシークレットをネームスペースに登録する（第 3 章で作成したものを確認）。
+**本章で作成するシークレット一覧:**
+
+| シークレット名 | 種別 | 格納内容 |
+|---|---|---|
+| `dq-pull-secret` | kubernetes.io/dockerconfigjson | ACR 認証情報（3章で作成済み） |
+| `dq-license-secret` | Opaque | ライセンスキー・ライセンス名 |
+| `dq-metastore-secret` | Opaque | メタストア DB パスワード |
+| `dq-admin-secret` | Opaque | DQ Web 管理者パスワード |
+
+### 6.1 イメージプルシークレット登録確認
+
+3章で作成した `dq-pull-secret` が対象ネームスペースに存在することを確認する。
+
+```bash
+kubectl get secret dq-pull-secret -n "${NAMESPACE}"
+```
+
+存在しない場合は 3章の 3.4 節を参照して再作成すること。
 
 ### 6.2 ライセンスキーのシークレット化
 
-Collibra ライセンスキーを Kubernetes Secret として登録し、Helm values から参照する。
+Collibra ライセンスキーと管理者パスワードを Kubernetes Secret として登録する。
+
+```bash
+# ライセンス情報の Secret
+kubectl create secret generic dq-license-secret \
+  --from-literal=license_key="${DQ_LICENSE_KEY}" \
+  --from-literal=license_name="${DQ_LICENSE_NAME}" \
+  --namespace "${NAMESPACE}"
+
+# メタストア DB パスワードの Secret
+kubectl create secret generic dq-metastore-secret \
+  --from-literal=password="${METASTORE_PASS}" \
+  --namespace "${NAMESPACE}"
+
+# DQ Web 管理者パスワードの Secret
+kubectl create secret generic dq-admin-secret \
+  --from-literal=password="${DQ_ADMIN_PASS}" \
+  --namespace "${NAMESPACE}"
+```
+
+作成した Secret を確認する（値は表示されない）。
+
+```bash
+kubectl get secret -n "${NAMESPACE}"
+```
+
+**期待される出力例:**
+
+```
+NAME                  TYPE                             DATA   AGE
+dq-pull-secret        kubernetes.io/dockerconfigjson   1      10m
+dq-license-secret     Opaque                           2      30s
+dq-metastore-secret   Opaque                           1      20s
+dq-admin-secret       Opaque                           1      10s
+```
 
 ### 6.3 Azure Key Vault 統合（オプション）
 
-Secret Store CSI ドライバーを使用して Azure Key Vault のシークレットを Pod に直接マウントする設定を行う。Helm チャートの `vaultProvider: "akv"` オプションを活用。
+機密情報を Azure Key Vault で一元管理し、Secret Store CSI ドライバー経由で Pod にマウントする構成。Kubernetes Secret を使用しない場合に選択する。
+
+#### 前提: CSI ドライバーアドオンの有効化
+
+```bash
+# AKS に Secret Store CSI ドライバーアドオンを有効化
+az aks enable-addons \
+  --resource-group "${RG_NAME}" \
+  --name "${AKS_NAME}" \
+  --addons azure-keyvault-secrets-provider
+
+# Pod が起動していることを確認
+kubectl get pods -n kube-system \
+  -l app=secrets-store-csi-driver
+```
+
+#### Key Vault へのシークレット登録
+
+```bash
+KV_NAME="kv-collibra-dq"   # Key Vault 名（事前に作成済みであること）
+
+az keyvault secret set --vault-name "${KV_NAME}" \
+  --name "dq-license-key"   --value "${DQ_LICENSE_KEY}"
+az keyvault secret set --vault-name "${KV_NAME}" \
+  --name "dq-license-name"  --value "${DQ_LICENSE_NAME}"
+az keyvault secret set --vault-name "${KV_NAME}" \
+  --name "dq-metastore-pass" --value "${METASTORE_PASS}"
+az keyvault secret set --vault-name "${KV_NAME}" \
+  --name "dq-admin-pass"    --value "${DQ_ADMIN_PASS}"
+```
+
+#### SecretProviderClass の作成
+
+```bash
+KV_TENANT_ID=$(az account show --query tenantId -o tsv)
+
+cat <<EOF | kubectl apply -f - -n "${NAMESPACE}"
+apiVersion: secrets-store.csi.x-k8s.io/v1
+kind: SecretProviderClass
+metadata:
+  name: dq-akv-secrets
+  namespace: ${NAMESPACE}
+spec:
+  provider: azure
+  parameters:
+    usePodIdentity: "false"
+    useVMManagedIdentity: "false"
+    clientID: "<Workload Identity のクライアント ID>"  # 6.4 節で取得
+    keyvaultName: "${KV_NAME}"
+    tenantId: "${KV_TENANT_ID}"
+    objects: |
+      array:
+        - |
+          objectName: dq-license-key
+          objectType: secret
+        - |
+          objectName: dq-license-name
+          objectType: secret
+        - |
+          objectName: dq-metastore-pass
+          objectType: secret
+        - |
+          objectName: dq-admin-pass
+          objectType: secret
+  secretObjects:
+    - secretName: dq-license-secret
+      type: Opaque
+      data:
+        - objectName: dq-license-key
+          key: license_key
+        - objectName: dq-license-name
+          key: license_name
+    - secretName: dq-metastore-secret
+      type: Opaque
+      data:
+        - objectName: dq-metastore-pass
+          key: password
+    - secretName: dq-admin-secret
+      type: Opaque
+      data:
+        - objectName: dq-admin-pass
+          key: password
+EOF
+```
 
 ### 6.4 Workload Identity 設定
 
-Azure Workload Identity を使用し、Pod が Azure リソース（Key Vault、PostgreSQL 等）にパスワードレスでアクセスできるよう構成する。
+DQ Web Pod が Azure リソース（Key Vault 等）にパスワードレスでアクセスするための Workload Identity を設定する。
+
+```bash
+# OIDC 発行者 URL を取得
+OIDC_ISSUER=$(az aks show \
+  --resource-group "${RG_NAME}" \
+  --name "${AKS_NAME}" \
+  --query "oidcIssuerProfile.issuerUrl" -o tsv)
+
+# Workload Identity 用マネージド ID を作成
+MI_NAME="mi-collibra-dq"
+az identity create \
+  --resource-group "${RG_NAME}" \
+  --name "${MI_NAME}" \
+  --location "${LOCATION}"
+
+MI_CLIENT_ID=$(az identity show \
+  --resource-group "${RG_NAME}" \
+  --name "${MI_NAME}" \
+  --query clientId -o tsv)
+
+MI_OBJECT_ID=$(az identity show \
+  --resource-group "${RG_NAME}" \
+  --name "${MI_NAME}" \
+  --query principalId -o tsv)
+```
+
+```bash
+# Key Vault へのアクセス権を付与
+KV_ID=$(az keyvault show --name "${KV_NAME}" --query id -o tsv)
+az role assignment create \
+  --role "Key Vault Secrets User" \
+  --assignee-object-id "${MI_OBJECT_ID}" \
+  --scope "${KV_ID}"
+```
+
+```bash
+# フェデレーション ID 資格情報を作成（Pod の ServiceAccount と紐付け）
+az identity federated-credential create \
+  --name "dq-web-federated" \
+  --identity-name "${MI_NAME}" \
+  --resource-group "${RG_NAME}" \
+  --issuer "${OIDC_ISSUER}" \
+  --subject "system:serviceaccount:${NAMESPACE}:collibra-dq-sa" \
+  --audience api://AzureADTokenExchange
+```
+
+```bash
+# Workload Identity アノテーション付き ServiceAccount を作成
+cat <<EOF | kubectl apply -f - -n "${NAMESPACE}"
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: collibra-dq-sa
+  namespace: ${NAMESPACE}
+  annotations:
+    azure.workload.identity/client-id: "${MI_CLIENT_ID}"
+EOF
+```
+
+設定を確認する。
+
+```bash
+kubectl get serviceaccount collibra-dq-sa -n "${NAMESPACE}" -o yaml
+```
 
 ---
 
