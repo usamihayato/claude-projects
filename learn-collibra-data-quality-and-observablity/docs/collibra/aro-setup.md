@@ -467,72 +467,436 @@ AKS 版と共通のパラメータに加え、ARO 固有の設定を示す。
 
 > **AKS 版との違い**: Azure Files を使用する点は同一。ARO では StorageClass のプロビジョナー名が異なる場合があるため、クラスター既存の StorageClass を優先して確認する。
 
+**本章で作成するストレージリソースの一覧:**
+
+| リソース | 用途 | アクセスモード | サイズ |
+|---|---|---|---|
+| StorageClass `azurefile-csi-rwx` | DQ Web / Spark 共用 | ReadWriteMany | - |
+| PVC `dq-web-pvc` | DQ Web の設定・ログ永続化 | ReadWriteMany | 10Gi |
+| PVC `spark-scratch-pvc` | Spark の一時処理領域 | ReadWriteMany | 20Gi |
+| PVC `dq-jdbc-drivers-pvc` | JDBC ドライバー格納 | ReadWriteMany | 5Gi |
+
 ### 5.1 OpenShift の StorageClass 確認
 
-ARO に組み込みの StorageClass（`managed-csi`・`azurefile-csi` 等）を確認し、ReadWriteMany 対応の StorageClass を選定する。
+ARO に組み込みの StorageClass を確認する。
+
+```bash
+oc get storageclass
+```
+
+**ARO の標準 StorageClass 一覧（抜粋）:**
+
+```
+NAME                    PROVISIONER                    RECLAIMPOLICY
+managed-csi (default)   disk.csi.azure.com             Delete
+managed-csi-premium     disk.csi.azure.com             Delete
+azurefile-csi           file.csi.azure.com             Delete
+azurefile-csi-premium   file.csi.azure.com             Delete
+```
+
+`azurefile-csi` は ReadWriteMany に対応しているが、SMB プロトコルでは ARO の SCC と権限の競合が発生しやすい。NFS プロトコルを使用するカスタムストレージクラスを作成して使用する。
+
+```bash
+oc apply -f - <<EOF
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: azurefile-csi-rwx
+provisioner: file.csi.azure.com
+parameters:
+  protocol: nfs
+  skuName: Premium_LRS
+reclaimPolicy: Retain
+volumeBindingMode: Immediate
+allowVolumeExpansion: true
+EOF
+
+oc get storageclass azurefile-csi-rwx
+```
 
 ### 5.2 DQ Web 用 PVC 設定
 
-DQ Web が使用する PersistentVolumeClaim を OpenShift プロジェクトに作成する。
+```bash
+oc apply -f - -n "${OC_PROJECT}" <<EOF
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: dq-web-pvc
+  namespace: ${OC_PROJECT}
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: azurefile-csi-rwx
+  resources:
+    requests:
+      storage: 10Gi
+EOF
+
+# バインド確認
+oc get pvc dq-web-pvc -n "${OC_PROJECT}" --watch
+```
+
+**期待される出力（STATUS が Bound）:**
+
+```
+NAME         STATUS   VOLUME      CAPACITY   ACCESS MODES   STORAGECLASS        AGE
+dq-web-pvc   Bound    pvc-xxxxx   10Gi       RWX            azurefile-csi-rwx   30s
+```
 
 ### 5.3 Spark Scratch Disk 用 PVC 設定
 
-Spark の一時処理領域として使用する PVC を作成する（デフォルト 20Gi）。
+```bash
+oc apply -f - -n "${OC_PROJECT}" <<EOF
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: spark-scratch-pvc
+  namespace: ${OC_PROJECT}
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: azurefile-csi-rwx
+  resources:
+    requests:
+      storage: 20Gi
+EOF
+
+oc get pvc spark-scratch-pvc -n "${OC_PROJECT}"
+```
 
 ### 5.4 JDBC ドライバー用 PVC 設定
 
-外部データソース接続用 JDBC ドライバーを格納する PVC を作成する。
+```bash
+oc apply -f - -n "${OC_PROJECT}" <<EOF
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: dq-jdbc-drivers-pvc
+  namespace: ${OC_PROJECT}
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: azurefile-csi-rwx
+  resources:
+    requests:
+      storage: 5Gi
+EOF
+
+# 全 PVC の状態まとめ確認
+oc get pvc -n "${OC_PROJECT}"
+```
+
+**期待される出力（全て Bound）:**
+
+```
+NAME                   STATUS   VOLUME     CAPACITY   ACCESS MODES   STORAGECLASS        AGE
+dq-web-pvc             Bound    pvc-xxx    10Gi       RWX            azurefile-csi-rwx   3m
+spark-scratch-pvc      Bound    pvc-yyy    20Gi       RWX            azurefile-csi-rwx   2m
+dq-jdbc-drivers-pvc    Bound    pvc-zzz    5Gi        RWX            azurefile-csi-rwx   1m
+```
 
 ---
 
 ## 6. 認証・シークレットの設定
 
-> **AKS 版との違い**: Kubernetes Secret の作成手順は同一。ARO 固有の手順として、Collibra DQ コンテナに対する **Security Context Constraints (SCC)** の付与が追加で必要となる。
+> **AKS 版との最大の違い**: ARO 固有の手順として **Security Context Constraints (SCC)** の付与が必要。Collibra DQ コンテナが必要とする UID での起動を許可するため、ServiceAccount に `anyuid` または カスタム SCC を付与する。
+
+**本章で作成するリソース一覧:**
+
+| リソース | 種別 | 内容 |
+|---|---|---|
+| `dq-pull-secret` | Secret | ACR 認証情報（3章で作成済み） |
+| `dq-license-secret` | Secret | ライセンスキー・ライセンス名 |
+| `dq-metastore-secret` | Secret | メタストア DB パスワード |
+| `dq-admin-secret` | Secret | DQ Web 管理者パスワード |
+| `collibra-dq-sa` | ServiceAccount | DQ / Spark 用 SA（SCC・Workload Identity 紐付け） |
 
 ### 6.1 Security Context Constraints (SCC) の設定
 
-ARO はデフォルトで `restricted-v2` SCC が適用され、root での実行やホストパスのマウントが禁止される。Collibra DQ が必要とする権限に応じて `anyuid` または カスタム SCC を ServiceAccount に付与する。
+SCC は OpenShift 固有のセキュリティ制御機構。デフォルトの `restricted-v2` では固定 UID での起動が拒否されるため、Collibra DQ の要件に応じて設定する。
+
+#### 現在の SCC を確認
+
+```bash
+# プロジェクトの Pod が使用している SCC を確認
+oc get pod -n "${OC_PROJECT}" \
+  -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.metadata.annotations.openshift\.io/scc}{"\n"}{end}'
+
+# 利用可能な SCC 一覧
+oc get scc
+```
+
+#### ServiceAccount の作成
+
+```bash
+oc create serviceaccount collibra-dq-sa -n "${OC_PROJECT}"
+```
+
+#### anyuid SCC の付与（推奨）
+
+Collibra DQ が特定の UID（例: 1000）での起動を必要とする場合、`anyuid` SCC を付与する。
+
+```bash
+# anyuid SCC を ServiceAccount に付与（クラスター管理者権限が必要）
+oc adm policy add-scc-to-user anyuid \
+  -z collibra-dq-sa \
+  -n "${OC_PROJECT}"
+
+# 付与の確認
+oc adm policy who-can use scc anyuid | grep collibra-dq-sa
+```
+
+#### カスタム SCC の作成（最小権限構成）
+
+`anyuid` よりも制限を絞りたい場合は、必要な権限のみを持つカスタム SCC を作成する。
+
+```bash
+oc apply -f - <<EOF
+apiVersion: security.openshift.io/v1
+kind: SecurityContextConstraints
+metadata:
+  name: collibra-dq-scc
+allowPrivilegeEscalation: false
+allowPrivilegedContainer: false
+runAsUser:
+  type: MustRunAsRange          # 指定範囲内の UID を許可
+  uidRangeMin: 1000
+  uidRangeMax: 65535
+seLinuxContext:
+  type: MustRunAs
+fsGroup:
+  type: MustRunAs
+  ranges:
+    - min: 1000
+      max: 65535
+volumes:
+  - configMap
+  - emptyDir
+  - persistentVolumeClaim
+  - secret
+users: []
+groups: []
+EOF
+
+# カスタム SCC を ServiceAccount に付与
+oc adm policy add-scc-to-user collibra-dq-scc \
+  -z collibra-dq-sa \
+  -n "${OC_PROJECT}"
+```
 
 ### 6.2 イメージプルシークレット登録確認
 
-3章で作成した `dq-pull-secret` がプロジェクトに存在することを確認する。
+```bash
+oc get secret dq-pull-secret -n "${OC_PROJECT}"
+# 存在しない場合は 3.4 節を参照して再作成
+```
 
 ### 6.3 ライセンスキーのシークレット化
 
-Collibra ライセンスキー・管理者パスワード・メタストアパスワードを OpenShift Secret として登録する。
+```bash
+# ライセンス情報
+oc create secret generic dq-license-secret \
+  --from-literal=license_key="${DQ_LICENSE_KEY}" \
+  --from-literal=license_name="${DQ_LICENSE_NAME}" \
+  -n "${OC_PROJECT}"
+
+# メタストア DB パスワード
+oc create secret generic dq-metastore-secret \
+  --from-literal=password="${METASTORE_PASS}" \
+  -n "${OC_PROJECT}"
+
+# DQ Web 管理者パスワード
+oc create secret generic dq-admin-secret \
+  --from-literal=password="${DQ_ADMIN_PASS}" \
+  -n "${OC_PROJECT}"
+
+# 確認
+oc get secret -n "${OC_PROJECT}"
+```
 
 ### 6.4 Azure Key Vault 統合（オプション）
 
-AKS 版と同様に Secret Store CSI ドライバーを使用して Azure Key Vault と統合する。ARO での CSI ドライバーのインストール方法は AKS と異なる点に注意する。
+ARO では OperatorHub 経由または Helm で Secret Store CSI ドライバーをインストールする。
 
-### 6.5 Workload Identity / Service Account 設定
+```bash
+# Helm で secrets-store-csi-driver をインストール
+helm repo add secrets-store-csi-driver \
+  https://kubernetes-sigs.github.io/secrets-store-csi-driver/charts
+helm repo update
 
-Azure AD Workload Identity と OpenShift の ServiceAccount を紐付ける設定を行う。
+helm upgrade --install csi-secrets-store \
+  secrets-store-csi-driver/secrets-store-csi-driver \
+  --namespace kube-system \
+  --set syncSecret.enabled=true \
+  --set enableSecretRotation=true
+
+# Azure Key Vault プロバイダーをインストール
+helm repo add csi-secrets-store-provider-azure \
+  https://azure.github.io/secrets-store-csi-driver-provider-azure/charts
+helm upgrade --install azure-csi-provider \
+  csi-secrets-store-provider-azure/csi-secrets-store-provider-azure \
+  --namespace kube-system
+```
+
+> **補足**: AKS では `az aks enable-addons` で有効化できるが、ARO では Helm または OperatorHub 経由で手動インストールが必要。SecretProviderClass の YAML 設定は AKS 版（6.3 節）と同一。
+
+### 6.5 Workload Identity / ServiceAccount 設定
+
+Azure AD Workload Identity と OpenShift の ServiceAccount を紐付ける。
+
+```bash
+# OIDC 発行者 URL を取得（ARO は組み込み OIDC を提供）
+OIDC_ISSUER=$(az aro show \
+  --resource-group "${RG_NAME}" \
+  --name "${ARO_NAME}" \
+  --query "clusterProfile.pullSecret" -o tsv 2>/dev/null || \
+  oc get authentication.config.openshift.io cluster \
+  -o jsonpath='{.spec.serviceAccountIssuer}')
+
+# Workload Identity 用マネージド ID を作成
+MI_NAME="mi-collibra-aro"
+az identity create \
+  --resource-group "${RG_NAME}" \
+  --name "${MI_NAME}" \
+  --location "${LOCATION}"
+
+MI_CLIENT_ID=$(az identity show -g "${RG_NAME}" -n "${MI_NAME}" \
+  --query clientId -o tsv)
+MI_OBJECT_ID=$(az identity show -g "${RG_NAME}" -n "${MI_NAME}" \
+  --query principalId -o tsv)
+
+# フェデレーション ID 資格情報を作成
+az identity federated-credential create \
+  --name "collibra-aro-federated" \
+  --identity-name "${MI_NAME}" \
+  --resource-group "${RG_NAME}" \
+  --issuer "${OIDC_ISSUER}" \
+  --subject "system:serviceaccount:${OC_PROJECT}:collibra-dq-sa" \
+  --audience api://AzureADTokenExchange
+
+# ServiceAccount にアノテーションを付与
+oc annotate serviceaccount collibra-dq-sa \
+  azure.workload.identity/client-id="${MI_CLIENT_ID}" \
+  -n "${OC_PROJECT}"
+```
 
 ---
 
 ## 7. SSL/HTTPS 設定
 
-> **AKS 版との違い**: Java Keystore の作成・Kubernetes Secret への登録手順は同一。ARO では TLS 終端を **OpenShift Route** で行う方式も選択できる（アプリ側の TLS 設定が不要になる）。
+> **AKS 版との違い**: Java Keystore の作成・Secret 登録手順は同一。ARO では TLS 終端を **OpenShift Route** で行う **Edge termination** が推奨。この方式ではアプリ（DQ Web）側での TLS 設定が不要になり、Route が証明書を処理する。
+
+**ARO での TLS 終端方式比較:**
+
+| 方式 | Route → Pod 通信 | アプリ側 TLS 設定 | 推奨場面 |
+|---|---|---|---|
+| Edge termination | HTTP（平文） | 不要 | **本手順で採用（推奨）** |
+| Re-encrypt termination | HTTPS | 必要（JKS 設定） | アプリまで E2E 暗号化が必要な場合 |
+| Passthrough termination | HTTPS（そのまま転送） | 必要（JKS 設定） | Route で証明書を管理しない場合 |
 
 ### 7.1 Java Keystore の作成
 
-`keytool` コマンドを使用して、証明書・秘密鍵を含む Keystore ファイル（`keystore.jks`）を作成する（自己署名 / CA 署名済みの2パターン）。
+Edge termination では Route が TLS を処理するため Keystore は不要。**Re-encrypt / Passthrough 方式を使用する場合のみ**本節を実施する。
+
+#### パターン A: 自己署名証明書（検証用）
+
+```bash
+mkdir -p ~/ssl && cd ~/ssl
+
+keytool -genkey \
+  -alias dq-server \
+  -keyalg RSA \
+  -keysize 2048 \
+  -keystore keystore.jks \
+  -validity 3650 \
+  -storepass "<keystoreパスワード>" \
+  -keypass  "<keystoreパスワード>" \
+  -dname "CN=<DQ Web のFQDNまたはIP>, OU=IT, O=<会社名>, L=Tokyo, ST=Tokyo, C=JP"
+
+keytool -list -keystore keystore.jks -storepass "<keystoreパスワード>"
+```
+
+#### パターン B: CA 署名済み証明書（本番用）
+
+```bash
+# PEM → PKCS12 → JKS に変換
+openssl pkcs12 -export \
+  -in server.crt -inkey server.key \
+  -chain -CAfile ca-chain.crt \
+  -name dq-server \
+  -out keystore.p12 \
+  -passout pass:"<keystoreパスワード>"
+
+keytool -importkeystore \
+  -srckeystore keystore.p12 -srcstoretype PKCS12 \
+  -srcstorepass "<keystoreパスワード>" \
+  -destkeystore keystore.jks -deststoretype JKS \
+  -deststorepass "<keystoreパスワード>"
+```
 
 ### 7.2 CA 証明書のインポート
 
-外部データソース接続に使用する CA 証明書を Java の `cacerts` にインポートする。
+外部データソース（SSL 接続が必要な場合）の CA 証明書を Java の `cacerts` にインポートする。
+
+```bash
+JAVA_CACERTS=$(find /usr/lib/jvm -name "cacerts" 2>/dev/null | head -1)
+
+keytool -import \
+  -alias "external-db-ca" \
+  -file ca-cert.pem \
+  -keystore "${JAVA_CACERTS}" \
+  -storepass "changeit" \
+  -noprompt
+```
 
 ### 7.3 OpenShift Secret への登録
 
-作成した Keystore ファイルを OpenShift Secret（`dq-ssl-secret`）としてプロジェクトに登録する。
+Re-encrypt / Passthrough 方式の場合のみ Keystore を Secret として登録する。
+
+```bash
+oc create secret generic dq-ssl-secret \
+  --from-file=keystore.jks=~/ssl/keystore.jks \
+  -n "${OC_PROJECT}"
+
+oc describe secret dq-ssl-secret -n "${OC_PROJECT}"
+```
 
 ### 7.4 TLS 終端方式の選択と Helm パラメータ設定
 
-以下の2方式から環境に応じて選択し、Helm パラメータを設定する。
+#### Edge termination（推奨）の場合
 
-- **Edge termination（推奨）**: Route で TLS を終端し、アプリまでは HTTP で通信
-- **Re-encrypt termination**: Route と アプリの両方で TLS を使用
+アプリ側での TLS 設定は不要。Helm values の TLS 設定は無効化する。
+
+```yaml
+# custom-values.yaml（Edge termination 時）
+global:
+  web:
+    tls:
+      enabled: false     # Route が TLS を処理するため無効
+    service:
+      type: ClusterIP
+```
+
+Route での証明書指定は 10章で行う。
+
+#### Re-encrypt termination の場合
+
+アプリ側でも TLS を有効化する。
+
+```yaml
+# custom-values.yaml（Re-encrypt termination 時）
+global:
+  web:
+    tls:
+      enabled: true
+      key:
+        secretName: dq-ssl-secret
+        alias: dq-server
+        type: JKS
+        pass: "<keystoreパスワード>"
+        store:
+          name: keystore.jks
+```
 
 ---
 
