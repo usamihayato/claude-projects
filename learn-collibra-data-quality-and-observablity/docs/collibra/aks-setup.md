@@ -250,23 +250,125 @@ kubectl config set-context --current --namespace="${NAMESPACE}"
 
 ## 3. コンテナイメージの準備と ACR 転送
 
-> **背景**: Collibra DQ のコンテナイメージは Google Container Registry のセキュアリポジトリに格納されており、インターネット経由でのアクセスが必要。プライベート AKS 環境では ACR 経由でのアクセスが推奨される。
+> **背景**: Collibra DQ のコンテナイメージは Google Container Registry (GCR) のセキュアリポジトリに格納されており、初回取得にはインターネット経由のアクセスが必要。本環境はプライベート AKS のため、GCR から取得したイメージを社内 ACR に転送してから AKS へデプロイする。
 
 ### 3.1 Collibra ライセンス情報の確認
 
-Collibra 社から提供されるライセンスメールに記載されたイメージリポジトリ URL・認証情報を確認する。
+Collibra 社から受領するライセンスメールに以下の情報が記載されている。事前に手元に用意すること。
 
-### 3.2 Google Container Registry からのイメージ取得
+| 情報 | 説明 | 変数名（2章で定義） |
+|---|---|---|
+| イメージレジストリ URL | GCR のリポジトリパス | `COLLIBRA_REGISTRY` |
+| レジストリ認証ユーザー名 | docker login 用ユーザー名 | `COLLIBRA_REGISTRY_USER` |
+| レジストリ認証パスワード | docker login 用パスワード | `COLLIBRA_REGISTRY_PASS` |
+| Helm チャート ZIP ダウンロード URL | チャートファイルの取得先 | （4章で使用） |
 
-提供された認証情報を使用し、DQ Web・Spark・Agent 等の各コンテナイメージを取得する。
+### 3.2 Collibra レジストリへのログインとイメージ取得
+
+管理用 Linux VM（インターネット経由アクセスが可能な環境）で実行する。
+
+```bash
+# Collibra レジストリにログイン
+docker login "${COLLIBRA_REGISTRY}" \
+  --username "${COLLIBRA_REGISTRY_USER}" \
+  --password "${COLLIBRA_REGISTRY_PASS}"
+```
+
+DQ 2026.02 で使用する主要イメージを取得する。
+
+```bash
+# DQ Web（UI / REST API サーバー）
+docker pull "${COLLIBRA_REGISTRY}/owl-web:${DQ_VERSION}"
+
+# DQ Agent（Spark ジョブオーケストレーター）
+docker pull "${COLLIBRA_REGISTRY}/owl-agent:${DQ_VERSION}"
+
+# Spark（データ品質チェック処理基盤）
+docker pull "${COLLIBRA_REGISTRY}/owl-spark:${SPARK_VERSION}"
+```
+
+> **補足**: 提供されるイメージ名・タグは Collibra のバージョンによって異なる場合がある。ライセンスメールまたは Helm チャートの `values.yaml` に記載されたイメージ名を優先すること。
+
+取得できたことを確認する。
+
+```bash
+docker images | grep -E "owl-web|owl-agent|owl-spark"
+```
 
 ### 3.3 ACR へのイメージ転送
 
-取得したイメージを社内 ACR にプッシュし、AKS からの参照先を ACR に統一する。
+取得したイメージに ACR のタグを付け直し、社内 ACR へプッシュする。
+
+```bash
+# ACR にログイン
+az acr login --name "${ACR_NAME}"
+
+# --- DQ Web ---
+docker tag "${COLLIBRA_REGISTRY}/owl-web:${DQ_VERSION}" \
+           "${ACR_LOGIN_SERVER}/collibra/owl-web:${DQ_VERSION}"
+docker push "${ACR_LOGIN_SERVER}/collibra/owl-web:${DQ_VERSION}"
+
+# --- DQ Agent ---
+docker tag "${COLLIBRA_REGISTRY}/owl-agent:${DQ_VERSION}" \
+           "${ACR_LOGIN_SERVER}/collibra/owl-agent:${DQ_VERSION}"
+docker push "${ACR_LOGIN_SERVER}/collibra/owl-agent:${DQ_VERSION}"
+
+# --- Spark ---
+docker tag "${COLLIBRA_REGISTRY}/owl-spark:${SPARK_VERSION}" \
+           "${ACR_LOGIN_SERVER}/collibra/owl-spark:${SPARK_VERSION}"
+docker push "${ACR_LOGIN_SERVER}/collibra/owl-spark:${SPARK_VERSION}"
+```
+
+ACR にイメージが登録されたことを確認する。
+
+```bash
+az acr repository list --name "${ACR_NAME}" --output table
+az acr repository show-tags \
+  --name "${ACR_NAME}" \
+  --repository collibra/owl-web \
+  --output table
+```
+
+**期待される出力例:**
+```
+Result
+------------------
+collibra/owl-web
+collibra/owl-agent
+collibra/owl-spark
+```
 
 ### 3.4 イメージプルシークレットの設定
 
-AKS の対象ネームスペース内に、ACR 認証用のプルシークレット（`dq-pull-secret`）を作成する。
+AKS は ACR に直接アタッチ済みのため、通常はプルシークレットは不要。ただし、Helm チャートが明示的にプルシークレットを参照する場合は以下で作成する。
+
+```bash
+# ACR 認証用プルシークレットを作成
+ACR_PASSWORD=$(az acr credential show \
+  --name "${ACR_NAME}" \
+  --query "passwords[0].value" \
+  --output tsv)
+
+kubectl create secret docker-registry dq-pull-secret \
+  --docker-server="${ACR_LOGIN_SERVER}" \
+  --docker-username="${ACR_NAME}" \
+  --docker-password="${ACR_PASSWORD}" \
+  --namespace "${NAMESPACE}"
+```
+
+作成を確認する。
+
+```bash
+kubectl get secret dq-pull-secret -n "${NAMESPACE}"
+```
+
+**期待される出力例:**
+```
+NAME              TYPE                             DATA   AGE
+dq-pull-secret    kubernetes.io/dockerconfigjson   1      5s
+```
+
+> **補足**: AKS と ACR が `az aks create --attach-acr` で連携済みの場合、Managed Identity 経由でのプル認証が自動で機能する。プルシークレットを二重に作成する必要はなく、Helm values でのシークレット参照も省略できる。
 
 ---
 
