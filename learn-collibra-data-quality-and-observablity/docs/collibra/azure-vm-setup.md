@@ -13,15 +13,16 @@
 3. [Java 17 のインストール](#3-java-17-のインストール)
 4. [Collibra DQ パッケージの準備](#4-collibra-dq-パッケージの準備)
 5. [インストール（setup.sh の実行）](#5-インストールsetupsh-の実行)
-6. 認証・シークレットの設定 *(作成中)*
-7. SSL/HTTPS 設定 *(作成中)*
-8. 外部メタストア（PostgreSQL）接続設定 *(作成中)*
-9. サービスの起動設定 *(作成中)*
-10. ネットワーク・外部アクセスの設定 *(作成中)*
-11. DQ Agent の設定 *(作成中)*
-12. 動作確認 *(作成中)*
-13. トラブルシューティング *(作成中)*
-14. アップグレード手順 *(作成中)*
+6. [認証・シークレットの設定](#6-認証シークレットの設定)
+7. [SSL/HTTPS 設定](#7-sslhttps-設定)
+8. [外部メタストア（PostgreSQL）接続設定](#8-外部メタストアpostgresql接続設定)
+9. [サービスの起動設定](#9-サービスの起動設定)
+10. [ネットワーク・外部アクセスの設定](#10-ネットワーク外部アクセスの設定)
+11. [DQ Agent の設定](#11-dq-agent-の設定)
+12. [動作確認](#12-動作確認)
+13. [トラブルシューティング](#13-トラブルシューティング)
+14. [アップグレード手順](#14-アップグレード手順)
+15. [参考リンク](#参考リンク)
 
 ---
 
@@ -1343,3 +1344,373 @@ curl -sk -u admin:<パスワード> \
 "name": "agent-vm-collibra-dq",
 "status": "ONLINE"
 ```
+
+---
+
+## 12. 動作確認
+
+### 12.1 プロセス確認
+
+```bash
+# DQ Web / Agent プロセスの確認
+ps -ef | grep owl | grep -v grep
+
+# Spark Master / Worker プロセスの確認
+ps -ef | grep spark | grep -v grep
+
+# Java プロセス一覧（DQ Web・Spark が含まれること）
+jps -l
+```
+
+**期待される出力例（フルインストール時）:**
+
+```
+XXXX org.springframework.boot.loader.JarLauncher       # DQ Web
+XXXX org.apache.spark.deploy.master.Master             # Spark Master
+XXXX org.apache.spark.deploy.worker.Worker             # Spark Worker
+```
+
+### 12.2 DQ Web UI へのアクセス確認
+
+ブラウザで以下の URL にアクセスし、ログイン画面が表示されることを確認する。
+
+| 構成 | URL |
+|---|---|
+| フルインストール（自社 VM） | `https://<VMのプライベートIP>:9000` |
+| 冗長化（ILB 経由） | `https://<ILBのフロントエンドIP>:9000` |
+| Agent Only（グループ会社 DQ Web） | `https://<DQ_WEB_HOST>:9000` |
+
+**管理者パスワード要件（初回ログイン時に変更を求められる場合）:**
+
+- 8〜72 文字
+- 大文字・数字・特殊文字（`!@#%$^&*?_~`）をそれぞれ 1 文字以上含む
+- ユーザーID（`admin`）を含まない
+
+### 12.3 サンプルジョブの実行テスト
+
+Agent が正常に動作していることを確認するため、テスト用の DQ ジョブを実行する。
+
+**操作手順（DQ Web UI から）:**
+
+1. DQ Web UI にログイン
+2. 左メニューから **Profile** → **+ New Profile** をクリック
+3. Datasource を選択し、テスト用のテーブル・カラムを指定
+4. **Run** をクリックしてジョブを実行
+5. ジョブが **PASSED** または **FAILED**（データ品質問題あり）で完了することを確認  
+   ※ジョブが `RUNNING` のまま終わらない場合はトラブルシューティング（13章）を参照
+
+**ジョブ実行中の Spark Worker プロセス確認:**
+
+```bash
+# Spark Executor が起動していることを確認
+ps -ef | grep -i "CoarseGrainedExecutorBackend" | grep -v grep
+```
+
+### 12.4 ログの確認
+
+```bash
+# DQ Web ログ（起動・リクエスト処理）
+tail -100 "${OWL_BASE}/logs/owl-web.log"
+
+# DQ Agent ログ（ジョブ取得・実行）
+tail -100 "${OWL_BASE}/logs/owl-agent.log"
+
+# Spark Master ログ
+tail -100 "${OWL_BASE}/spark/logs/spark-*-org.apache.spark.deploy.master.Master-*.out"
+
+# エラーログの抽出
+grep -E "ERROR|WARN" "${OWL_BASE}/logs/owl-web.log" | tail -50
+```
+
+### 12.5 Spark Cluster UI の確認
+
+ブラウザで `http://<VMのプライベートIP>:8080` にアクセスし、以下を確認する。
+
+| 確認項目 | 期待値 |
+|---|---|
+| Workers | 1 以上が `ALIVE` 状態 |
+| Status | `ALIVE` |
+| Cores | VM の vCPU 数以下 |
+| Memory | VM の RAM に近い値 |
+
+### 12.6 Azure Monitor によるメトリクス確認
+
+Azure Portal → 対象 VM → **監視** → **メトリック** で以下を確認する。
+
+| メトリクス | 確認内容 |
+|---|---|
+| CPU 使用率 | 通常時は 20〜40%、ジョブ実行時に上昇すること |
+| 使用可能メモリ | HEAP_MAX_SIZE の設定値より十分な空きがあること |
+| ディスク IOPS | ログ・Spark 一時領域の書き込みが確認できること |
+
+```bash
+# VM 上からのリソース確認（コマンドライン）
+# CPU・メモリの使用状況
+top -b -n 1 | head -20
+
+# ディスク使用量
+df -h "${OWL_BASE}"
+
+# ログディレクトリのサイズ
+du -sh "${OWL_BASE}/logs/"
+```
+
+---
+
+## 13. トラブルシューティング
+
+### 13.1 症状別対処表
+
+| 症状 | 主な原因 | 確認コマンド・対処法 |
+|---|---|---|
+| DQ Web が起動しない | ポート競合 / ライセンスキー不正 / HEAP 不足 | `ss -tlnp \| grep 9000`、`tail -50 ${OWL_BASE}/logs/owl-web.log` |
+| Agent が Offline のまま | Metastore 疎通不可 / パスワード暗号化ミス / agentid 重複 | `nc -zv ${METASTORE_HOST} 5432`、`grep password ${OWL_BASE}/config/owl.properties` |
+| Spark ジョブが FAILED | Java/Spark バージョン不整合 / Executor メモリ不足 | `${OWL_BASE}/spark/bin/spark-submit --version`、`grep executorMemory ${OWL_BASE}/config/agent.properties` |
+| HTTPS 接続エラー | 証明書パス誤り / キーストアパスワード誤り | `grep SERVER_SSL ${OWL_BASE}/config/owl-env.sh`、`keytool -list -keystore ${OWL_BASE}/certs/keystore.p12` |
+| Metastore 接続エラー | NSG ブロック / Private Endpoint 未設定 / sslmode 不一致 | `nc -zv ${METASTORE_HOST} ${METASTORE_PORT}`、`nslookup ${METASTORE_HOST}` |
+| OutOfMemoryError | HEAP_MAX_SIZE 不足 | `grep HEAP ${OWL_BASE}/config/owl-env.sh`、JVM ログ確認 |
+| ULIMIT エラー（too many open files） | ファイルディスクリプタ上限超過 | `ulimit -n`（4096 以上であること）、2章の ULIMIT 設定を再実施 |
+| `java.lang.reflect.*` 系エラー | EXTRA_JVM_OPTIONS 未設定 | `grep EXTRA_JVM ${OWL_BASE}/config/owl-env.sh` |
+| ジョブが RUNNING のまま停止 | Spark Executor が起動失敗 / メモリ不足 | `ps -ef \| grep CoarseGrained`、Spark Master UI（:8080）でジョブ状態を確認 |
+
+### 13.2 デバッグコマンド集
+
+```bash
+# ----- ログ確認 -----
+# DQ Web のリアルタイムログ
+tail -f "${OWL_BASE}/logs/owl-web.log"
+
+# DQ Agent のリアルタイムログ
+tail -f "${OWL_BASE}/logs/owl-agent.log"
+
+# エラーのみ抽出
+grep -n "ERROR" "${OWL_BASE}/logs/owl-web.log" | tail -30
+
+# ----- プロセス確認 -----
+# DQ 関連プロセス一覧
+ps -ef | grep -E "owl|spark" | grep -v grep
+
+# Java プロセス（PID とクラス名）
+jps -l
+
+# ----- ネットワーク確認 -----
+# LISTEN ポートの確認
+ss -tlnp | grep -E "9000|8080|7077|5432"
+
+# Metastore への疎通
+nc -zv "${METASTORE_HOST}" "${METASTORE_PORT}"
+
+# ----- 設定ファイル確認 -----
+# owl-env.sh の主要設定
+grep -E "LICENSE|PORT|HEAP|SSL|JAVA_HOME" "${OWL_BASE}/config/owl-env.sh"
+
+# owl.properties のデータソース設定
+grep -E "datasource\.(url|username|password)" "${OWL_BASE}/config/owl.properties"
+
+# agent.properties の Spark 設定
+grep -E "spark|executor|driver|agentid" "${OWL_BASE}/config/agent.properties"
+
+# ----- リソース確認 -----
+# メモリ使用状況
+free -h
+
+# ディスク使用量
+df -h
+
+# ログディレクトリのサイズ（肥大化していないか確認）
+du -sh "${OWL_BASE}/logs/"*
+
+# ----- systemd 確認 -----
+sudo systemctl status collibra-dq
+sudo journalctl -u collibra-dq --since "1 hour ago"
+```
+
+### 13.3 ログローテーションの設定
+
+長期運用でログが肥大化しないよう logrotate を設定する。
+
+```bash
+sudo tee /etc/logrotate.d/collibra-dq <<EOF
+${OWL_BASE}/logs/*.log {
+    daily
+    rotate 14
+    compress
+    delaycompress
+    missingok
+    notifempty
+    copytruncate
+}
+EOF
+
+# 動作確認
+sudo logrotate --debug /etc/logrotate.d/collibra-dq
+```
+
+---
+
+## 14. アップグレード手順
+
+> **重要**: アップグレード前に必ずメタストアのバックアップを取ること。ロールバックは公式にサポートされていないが、`bin.backup` からの手動リストアで対応する。
+
+### 14.1 アップグレード前の準備
+
+#### バージョン確認
+
+```bash
+# 現在の DQ バージョンを確認（DQ Web UI → 右上の ? → About）
+# または owl-env.sh・パッケージ名から確認
+ls "${OWL_BASE}/bin/" | grep -i owl | head -5
+```
+
+#### Java・Spark バージョン互換性の確認
+
+| DQ バージョン | Java | Spark |
+|---|---|---|
+| **2026.02 以降** | **17** | **4.1.0** |
+| 2025.08 〜 2026.01 | 17 | 3.5.6 |
+| 2025.02 〜 2025.07 | 17 | 3.5.3 |
+| 2025.01 以前 | 8 / 11 | 2.3.0 〜 3.4.1 |
+
+アップグレード先のバージョンで Java・Spark の要件が変わる場合は、先に Java・Spark をアップグレードすること。
+
+```bash
+# 現在の Java バージョン確認
+java -version
+
+# 現在の Spark バージョン確認
+"${OWL_BASE}/spark/bin/spark-submit" --version
+```
+
+#### メタストアのバックアップ
+
+```bash
+# バックアップディレクトリの作成
+mkdir -p /backup/collibra-dq
+
+# pg_dump でメタストアをバックアップ
+pg_dump \
+  -h "${METASTORE_HOST}" \
+  -p "${METASTORE_PORT}" \
+  -U "${METASTORE_USER}" \
+  -d "${METASTORE_DB}" \
+  -F c \
+  -f "/backup/collibra-dq/metastore_$(date +%Y%m%d_%H%M%S).dump"
+
+# バックアップファイルの確認
+ls -lh /backup/collibra-dq/
+```
+
+### 14.2 サービスの停止
+
+```bash
+cd "${OWL_BASE}"
+
+# DQ サービスを停止
+./owlmanage.sh stop
+
+# プロセスが完全に停止したことを確認
+sleep 10
+ps -ef | grep -E "owl|spark" | grep -v grep
+# → 出力がないこと
+```
+
+### 14.3 旧バイナリのバックアップ
+
+```bash
+# 旧 bin/ をバックアップ（ロールバック用）
+mv "${OWL_BASE}/bin" "${OWL_BASE}/bin.backup.$(date +%Y%m%d)"
+
+# 旧 spark/ をバックアップ（Spark バージョンが変わる場合）
+mv "${OWL_BASE}/spark" "${OWL_BASE}/spark.backup.$(date +%Y%m%d)"
+```
+
+### 14.4 新パッケージの展開と差し替え
+
+```bash
+# 新パッケージを /tmp に転送・展開（4章と同様の手順）
+cd /tmp
+tar -xvf dq-full-package-<NEW_VERSION>.tar.gz
+cd dq
+
+# bin/ を差し替え
+mkdir -p "${OWL_BASE}/bin"
+cp -r bin/* "${OWL_BASE}/bin/"
+
+# spark/ を差し替え（Spark バージョンが変わる場合のみ）
+cp -r spark "${OWL_BASE}/spark"
+
+# 管理スクリプトを更新
+cp owlmanage.sh "${OWL_BASE}/owlmanage.sh"
+cp owlcheck.sh "${OWL_BASE}/owlcheck.sh"
+chmod +x "${OWL_BASE}/owlmanage.sh" "${OWL_BASE}/owlcheck.sh"
+```
+
+### 14.5 サービスの起動と動作確認
+
+```bash
+cd "${OWL_BASE}"
+
+# 起動
+./owlmanage.sh start
+
+# 起動ログの確認
+tail -f "${OWL_BASE}/logs/owl-web.log"
+# → "Started OwlApplication in XX seconds" が出力されること
+```
+
+DQ Web UI にログインし、**右上の ? → About** でバージョンが新バージョンになっていることを確認する。
+
+### 14.6 ロールバック手順
+
+アップグレード後に問題が発生した場合、以下の手順で旧バージョンに戻す。
+
+```bash
+cd "${OWL_BASE}"
+
+# DQ サービスを停止
+./owlmanage.sh stop
+
+# 新バイナリを削除して旧バイナリに戻す
+BACKUP_DATE="<バックアップ時の日付 例: 20260416>"
+rm -rf "${OWL_BASE}/bin"
+mv "${OWL_BASE}/bin.backup.${BACKUP_DATE}" "${OWL_BASE}/bin"
+
+# Spark バージョンが変わっていた場合
+rm -rf "${OWL_BASE}/spark"
+mv "${OWL_BASE}/spark.backup.${BACKUP_DATE}" "${OWL_BASE}/spark"
+
+# 旧スクリプトに戻す（バックアップがある場合）
+# cp /tmp/dq-old/owlmanage.sh "${OWL_BASE}/owlmanage.sh"
+
+# サービスを再起動
+./owlmanage.sh start
+```
+
+メタストアのスキーマに互換性がない場合はバックアップから復元する（DBA と連携して実施）。
+
+```bash
+# メタストアの復元（必要な場合のみ・DBA と連携して実施）
+pg_restore \
+  -h "${METASTORE_HOST}" \
+  -p "${METASTORE_PORT}" \
+  -U "${METASTORE_USER}" \
+  -d "${METASTORE_DB}" \
+  -c \
+  "/backup/collibra-dq/metastore_<バックアップ日時>.dump"
+```
+
+---
+
+## 参考リンク
+
+| ドキュメント | URL |
+|---|---|
+| スタンドアロンインストール | [Install on self-hosted Spark Standalone](https://productresources.collibra.com/docs/collibra/dqc/latest/Content/DataQuality/Installation/ta_standalone-install.htm) |
+| スタンドアロン初期セットアップ | [Complete the Initial Setup](https://productresources.collibra.com/docs/collibra/latest/Content/DataQuality/Installation/ta_standalone-complete-initial-setup.htm) |
+| スタンドアロン設定オプション | [Additional Standalone Configuration Options](https://productresources.collibra.com/docs/collibra/latest/Content/DataQuality/Installation/ref_standalone-configuration-options.htm) |
+| Agent セットアップ | [Set up a DQ agent](https://productresources.collibra.com/docs/collibra/latest/Content/DataQuality/Installation/ta_configure-agent.htm) |
+| システム要件 | [System requirements](https://productresources.collibra.com/docs/collibra/dqc/latest/Content/DataQuality/DQArchitecture/to_system-requirements.htm) |
+| アップグレード手順 | [Upgrade Collibra DQ](https://productresources.collibra.com/docs/collibra/dqc/latest/Content/DataQuality/Installation/Upgrade/ta_upgrade-collibra-dq.htm) |
+| アップグレード要件 | [Upgrade requirements](https://productresources.collibra.com/docs/collibra/dqc/latest/Content/DataQuality/Installation/Upgrade/ref_upgrade-requirements.htm) |
+| Azure DB for PostgreSQL Entra 認証 | [Microsoft Entra 認証の設定](https://learn.microsoft.com/ja-jp/azure/postgresql/flexible-server/how-to-configure-sign-in-azure-ad-authentication) |
+| Azure Key Vault シークレット管理 | [Azure Key Vault のクイックスタート](https://learn.microsoft.com/ja-jp/azure/key-vault/secrets/quick-create-cli) |
