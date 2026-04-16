@@ -1027,35 +1027,305 @@ TLS 有効化時に DQ Web の ConfigMap に設定される主要な環境変数
 
 ## 8. 外部メタストア（PostgreSQL）接続設定
 
-> **背景**: Collibra DQ のメタデータを永続化するためのメタストア DB として、外部 PostgreSQL を使用する。AKS 環境では Azure Database for PostgreSQL Flexible Server を推奨。
+> **背景**: Collibra DQ のメタデータを永続化するためのメタストア DB として、外部 PostgreSQL を使用する。AKS 環境では Azure Database for PostgreSQL Flexible Server を推奨。aks-build.md で構築した Private Endpoint 経由で接続する。
 
-### 8.1 Azure Database for PostgreSQL Flexible Server への接続
+### 8.1 Azure Database for PostgreSQL Flexible Server への接続確認
 
-Private Endpoint 経由での接続設定（ホスト名、ポート、DB 名、ユーザー）を確認する。
+Private Endpoint の疎通確認と、メタストア用 DB・ユーザーの存在を確認する。
+
+```bash
+# 管理用 VM から PostgreSQL への疎通確認
+kubectl run pg-test --rm -it \
+  --image=postgres:15 \
+  --restart=Never \
+  --namespace="${NAMESPACE}" \
+  -- psql "host=${METASTORE_HOST} port=${METASTORE_PORT} \
+           dbname=${METASTORE_DB} user=${METASTORE_USER} \
+           password=${METASTORE_PASS} sslmode=require" \
+  -c "SELECT version();"
+```
+
+**期待される出力例:**
+```
+                                   version
+----------------------------------------------------------------------
+ PostgreSQL 16.x on x86_64-pc-linux-gnu, compiled by gcc ...
+(1 row)
+```
+
+接続できない場合は以下を確認する。
+
+```bash
+# AKS ノードから PostgreSQL ポートへの疎通確認
+kubectl run nc-test --rm -it \
+  --image=alpine \
+  --restart=Never \
+  --namespace="${NAMESPACE}" \
+  -- nc -zv "${METASTORE_HOST}" 5432
+```
+
+#### メタストア DB の初期作成（未作成の場合）
+
+```bash
+# 管理者権限で接続し、メタストア用 DB とユーザーを作成
+kubectl run pg-init --rm -it \
+  --image=postgres:15 \
+  --restart=Never \
+  --namespace="${NAMESPACE}" \
+  -- psql "host=${METASTORE_HOST} port=${METASTORE_PORT} \
+           dbname=postgres user=<管理者ユーザー> \
+           password=<管理者パスワード> sslmode=require" \
+  -c "
+    CREATE DATABASE ${METASTORE_DB};
+    CREATE USER ${METASTORE_USER} WITH PASSWORD '${METASTORE_PASS}';
+    GRANT ALL PRIVILEGES ON DATABASE ${METASTORE_DB} TO ${METASTORE_USER};
+    ALTER DATABASE ${METASTORE_DB} OWNER TO ${METASTORE_USER};
+  "
+```
 
 ### 8.2 パスワードレス認証（Azure AD）設定
 
-Azure Active Directory 認証を使用し、パスワードを直接扱わない接続方式を構成する（Workload Identity と連携）。
+パスワードを直接扱わず、Azure AD のマネージド ID 経由で PostgreSQL に接続する構成。6章で作成した Workload Identity を利用する。
+
+```bash
+# PostgreSQL サーバーで Azure AD 認証を有効化
+PG_SERVER_NAME="<PostgreSQL サーバー名>"
+az postgres flexible-server update \
+  --resource-group "${RG_NAME}" \
+  --name "${PG_SERVER_NAME}" \
+  --active-directory-auth Enabled
+
+# マネージド ID を PostgreSQL の Azure AD 管理者として設定
+az postgres flexible-server ad-admin create \
+  --resource-group "${RG_NAME}" \
+  --server-name "${PG_SERVER_NAME}" \
+  --display-name "${MI_NAME}" \
+  --object-id "${MI_OBJECT_ID}" \
+  --type ServicePrincipal
+```
+
+PostgreSQL 側でマネージド ID に権限を付与する。
+
+```bash
+kubectl run pg-role --rm -it \
+  --image=postgres:15 \
+  --restart=Never \
+  --namespace="${NAMESPACE}" \
+  -- psql "host=${METASTORE_HOST} port=${METASTORE_PORT} \
+           dbname=${METASTORE_DB} \
+           user=<Azure AD 管理者ユーザー> \
+           password=<Azure AD アクセストークン> sslmode=require" \
+  -c "
+    GRANT ALL PRIVILEGES ON DATABASE ${METASTORE_DB} TO \"${MI_NAME}\";
+    GRANT ALL ON SCHEMA public TO \"${MI_NAME}\";
+  "
+```
+
+> **補足**: パスワードレス認証を使用する場合、Helm values の metastore パスワード設定は空にするか省略し、Workload Identity トークンでの認証に切り替える。対応状況は利用する Collibra DQ のバージョンに依存するため、ライセンスメールまたはリリースノートで確認すること。
 
 ### 8.3 接続文字列の設定
 
-Helm の values または Secret として JDBC 接続文字列を設定し、DQ Web からメタストアへの接続を確立する。
+JDBC 接続文字列を Kubernetes Secret として設定し、Helm values から参照する。
+
+```bash
+# JDBC 接続 URL を Secret に追加
+JDBC_URL="jdbc:postgresql://${METASTORE_HOST}:${METASTORE_PORT}/${METASTORE_DB}?currentSchema=public&sslmode=require"
+
+kubectl create secret generic dq-metastore-jdbc \
+  --from-literal=url="${JDBC_URL}" \
+  --from-literal=username="${METASTORE_USER}" \
+  --namespace "${NAMESPACE}"
+```
+
+Helm values での参照設定（`custom-values.yaml` に追記）:
+
+```yaml
+global:
+  metastore:
+    host: "<METASTORE_HOST>"
+    port: "5432"
+    db: "owlmetastore"
+    user: "<METASTORE_USER>"
+    # パスワードは Secret から参照
+    existingSecret: dq-metastore-secret
+    existingSecretKey: password
+```
+
+接続文字列パターンの参考:
+
+| 接続先 | JDBC URL 例 |
+|---|---|
+| Azure DB for PostgreSQL（SSL必須） | `jdbc:postgresql://<host>.postgres.database.azure.com:5432/owlmetastore?currentSchema=public&sslmode=require` |
+| ローカル PostgreSQL | `jdbc:postgresql://localhost:5432/owlmetastore?currentSchema=public` |
+| Amazon RDS | `jdbc:postgresql://<host>.rds.amazonaws.com:5432/owlmetastore?currentSchema=public` |
 
 ---
 
 ## 9. Collibra DQ のデプロイ（Helm）
 
-### 9.1 helm upgrade --install コマンド
+> **前提**: 2〜8章の設定が完了していること。特にネームスペース・PVC・Secret・Keystore がすべて作成済みであることを確認してからデプロイを実行する。
 
-バージョン、ライセンス、ストレージクラス、サービスタイプ等を指定した `helm upgrade --install` コマンドを実行する。
+### 9.1 デプロイ前チェックリスト
 
-### 9.2 デプロイ状態の確認
+```bash
+# ネームスペース確認
+kubectl get namespace "${NAMESPACE}"
 
-Pod の起動状況、PVC のバインド状態、Service の作成を確認する。
+# PVC が全て Bound であることを確認
+kubectl get pvc -n "${NAMESPACE}"
 
-### 9.3 初期起動の確認
+# Secret が揃っていることを確認
+kubectl get secret -n "${NAMESPACE}"
 
-DQ Web Pod のログを確認し、アプリケーションが正常に起動していることを確認する。
+# チャートファイルの存在確認
+ls "${CHART_PATH}/Chart.yaml"
+```
+
+**デプロイ前の期待状態:**
+
+| リソース | 確認項目 |
+|---|---|
+| Namespace | `collibra-dq` が Active |
+| PVC | `dq-web-pvc` / `spark-scratch-pvc` / `dq-jdbc-drivers-pvc` が Bound |
+| Secret | `dq-pull-secret` / `dq-license-secret` / `dq-metastore-secret` / `dq-admin-secret` / `dq-ssl-secret` が存在 |
+| Chart | `${CHART_PATH}/Chart.yaml` が存在 |
+
+### 9.2 custom-values.yaml の作成
+
+`--set` での指定が増えると管理しにくいため、カスタム値ファイルにまとめる。
+
+```bash
+cat <<EOF > ~/custom-values.yaml
+global:
+  version:
+    dq: "${DQ_VERSION}"
+    spark: "${SPARK_VERSION}"
+
+  image:
+    repo: "${ACR_LOGIN_SERVER}/collibra"
+
+  configMap:
+    data:
+      license_key: ""    # Secret から参照するため空欄
+      license_name: ""
+
+  web:
+    admin:
+      email: "${DQ_ADMIN_EMAIL}"
+      password: ""       # Secret から参照するため空欄
+    service:
+      type: ClusterIP    # Ingress 使用時は ClusterIP（10章で Ingress を設定）
+    tls:
+      enabled: true
+      key:
+        secretName: dq-ssl-secret
+        alias: dq-server
+        type: JKS
+        pass: "<keystoreパスワード>"
+        store:
+          name: keystore.jks
+
+  metastore:
+    host: "${METASTORE_HOST}"
+    port: "${METASTORE_PORT}"
+    db: "${METASTORE_DB}"
+    user: "${METASTORE_USER}"
+    existingSecret: dq-metastore-secret
+    existingSecretKey: password
+
+  persistence:
+    web:
+      storageClassName: azurefile-csi-rwx
+      existingClaim: dq-web-pvc
+
+spark_scratch_type: persistentVolumeClaim
+spark_scratch_storage_class: azurefile-csi-rwx
+spark_scratch_storage_size: 20Gi
+
+imagePullSecrets:
+  - name: dq-pull-secret
+
+serviceAccount:
+  name: collibra-dq-sa   # 6章で作成した Workload Identity 用 SA
+EOF
+```
+
+### 9.3 helm upgrade --install コマンド
+
+```bash
+helm upgrade --install "${HELM_RELEASE_NAME}" "${CHART_PATH}" \
+  --namespace "${NAMESPACE}" \
+  --values ~/custom-values.yaml \
+  --set global.configMap.data.license_key="$(
+      kubectl get secret dq-license-secret -n ${NAMESPACE} \
+        -o jsonpath='{.data.license_key}' | base64 -d)" \
+  --set global.configMap.data.license_name="$(
+      kubectl get secret dq-license-secret -n ${NAMESPACE} \
+        -o jsonpath='{.data.license_name}' | base64 -d)" \
+  --set global.web.admin.password="$(
+      kubectl get secret dq-admin-secret -n ${NAMESPACE} \
+        -o jsonpath='{.data.password}' | base64 -d)" \
+  --timeout 10m \
+  --wait
+```
+
+デプロイの進行状況を別ターミナルで確認する。
+
+```bash
+kubectl get pods -n "${NAMESPACE}" --watch
+```
+
+### 9.4 デプロイ状態の確認
+
+```bash
+# Pod の状態確認（全て Running になること）
+kubectl get pods -n "${NAMESPACE}" -o wide
+
+# Service の確認
+kubectl get svc -n "${NAMESPACE}"
+
+# PVC のバインド確認
+kubectl get pvc -n "${NAMESPACE}"
+
+# Helm リリース確認
+helm list -n "${NAMESPACE}"
+```
+
+**正常時の Pod 一覧例:**
+
+```
+NAME                              READY   STATUS    RESTARTS   AGE
+collibra-dq-web-xxxxxxxxx-xxxxx   1/1     Running   0          3m
+collibra-dq-agent-xxxxxxx-xxxxx   1/1     Running   0          3m
+```
+
+### 9.5 初期起動の確認
+
+DQ Web Pod のログで正常起動メッセージを確認する。
+
+```bash
+# DQ Web のログを確認
+kubectl logs -n "${NAMESPACE}" \
+  -l app=owl-web \
+  --tail=100 \
+  --follow
+```
+
+**正常起動時のログキーワード:**
+
+```
+Started OwlApplication in xx.xxx seconds
+Tomcat started on port(s): 9000
+```
+
+エラーが出力されている場合は 13章（トラブルシューティング）を参照すること。
+
+```bash
+# エラーのみ抽出して確認
+kubectl logs -n "${NAMESPACE}" \
+  -l app=owl-web \
+  --tail=200 | grep -iE "error|exception|failed"
+```
 
 ---
 
