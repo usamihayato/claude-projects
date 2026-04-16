@@ -902,67 +902,410 @@ global:
 
 ## 8. 外部メタストア（PostgreSQL）接続設定
 
-> **AKS 版との違い**: 接続確認・JDBC URL・パスワードレス認証の設定手順は AKS 版と同一。`kubectl run` の代わりに `oc run` を使用する。
+> **AKS 版との違い**: 接続確認・JDBC URL・パスワードレス認証の設定手順は AKS 版と同一。`kubectl run` の代わりに `oc run` を使用する点のみ異なる。
 
 ### 8.1 Azure Database for PostgreSQL への接続確認
 
-`oc run` による疎通確認と、メタストア用 DB・ユーザーの存在確認を行う。
+Private Endpoint の疎通確認と、メタストア用 DB・ユーザーの存在を確認する。
+
+```bash
+# PostgreSQL への疎通確認
+oc run pg-test --rm -it \
+  --image=postgres:15 \
+  --restart=Never \
+  -n "${OC_PROJECT}" \
+  -- psql "host=${METASTORE_HOST} port=${METASTORE_PORT} \
+           dbname=${METASTORE_DB} user=${METASTORE_USER} \
+           password=${METASTORE_PASS} sslmode=require" \
+  -c "SELECT version();"
+```
+
+> **注意**: ARO の SCC により `postgres:15` イメージが `restricted-v2` で拒否される場合がある。その場合は `--overrides` で `runAsNonRoot: false` を一時的に指定するか、疎通確認用に `alpine` + `nc` を使用する。
+
+```bash
+# ポート疎通のみ確認する場合（SCC 制限が厳しい環境向け）
+oc run nc-test --rm -it \
+  --image=alpine \
+  --restart=Never \
+  -n "${OC_PROJECT}" \
+  -- nc -zv "${METASTORE_HOST}" 5432
+```
+
+#### メタストア DB の初期作成（未作成の場合）
+
+```bash
+oc run pg-init --rm -it \
+  --image=postgres:15 \
+  --restart=Never \
+  -n "${OC_PROJECT}" \
+  -- psql "host=${METASTORE_HOST} port=${METASTORE_PORT} \
+           dbname=postgres user=<管理者ユーザー> \
+           password=<管理者パスワード> sslmode=require" \
+  -c "
+    CREATE DATABASE ${METASTORE_DB};
+    CREATE USER ${METASTORE_USER} WITH PASSWORD '${METASTORE_PASS}';
+    GRANT ALL PRIVILEGES ON DATABASE ${METASTORE_DB} TO ${METASTORE_USER};
+    ALTER DATABASE ${METASTORE_DB} OWNER TO ${METASTORE_USER};
+  "
+```
 
 ### 8.2 パスワードレス認証（Azure AD）設定
 
-Azure AD 認証を有効化し、Workload Identity 経由でのパスワードレス接続を構成する。
+6章で作成したマネージド ID（`mi-collibra-aro`）を使用して PostgreSQL にパスワードレスで接続する構成。手順は AKS 版と同一。
+
+```bash
+PG_SERVER_NAME="<PostgreSQL サーバー名>"
+
+# PostgreSQL サーバーで Azure AD 認証を有効化
+az postgres flexible-server update \
+  --resource-group "${RG_NAME}" \
+  --name "${PG_SERVER_NAME}" \
+  --active-directory-auth Enabled
+
+# マネージド ID を Azure AD 管理者として設定
+az postgres flexible-server ad-admin create \
+  --resource-group "${RG_NAME}" \
+  --server-name "${PG_SERVER_NAME}" \
+  --display-name "${MI_NAME}" \
+  --object-id "${MI_OBJECT_ID}" \
+  --type ServicePrincipal
+```
 
 ### 8.3 接続文字列の設定
 
-JDBC 接続 URL を OpenShift Secret として登録し、Helm values から参照する。
+```bash
+JDBC_URL="jdbc:postgresql://${METASTORE_HOST}:${METASTORE_PORT}/${METASTORE_DB}?currentSchema=public&sslmode=require"
+
+oc create secret generic dq-metastore-jdbc \
+  --from-literal=url="${JDBC_URL}" \
+  --from-literal=username="${METASTORE_USER}" \
+  -n "${OC_PROJECT}"
+```
+
+`custom-values.yaml` に metastore 接続設定を追加する。
+
+```yaml
+global:
+  metastore:
+    host: "<METASTORE_HOST>"
+    port: "5432"
+    db: "owlmetastore"
+    user: "<METASTORE_USER>"
+    existingSecret: dq-metastore-secret
+    existingSecretKey: password
+```
 
 ---
 
 ## 9. Collibra DQ のデプロイ（Helm）
 
-> **AKS 版との違い**: `helm upgrade --install` の基本コマンドは同一。ARO 向けには SCC・`securityContext`・Route 有効化の設定を `custom-values.yaml` に追加する。
+> **AKS 版との違い**: `helm upgrade --install` の基本コマンドは同一。ARO 向けには **SCC・securityContext** の設定を `custom-values.yaml` に追加する。確認コマンドは `kubectl` → `oc` に置き換える。
 
 ### 9.1 デプロイ前チェックリスト
 
-プロジェクト・PVC・Secret・SCC 設定がすべて完了していることを確認する。
+```bash
+# Project 確認
+oc get project "${OC_PROJECT}"
+
+# PVC が全て Bound であることを確認
+oc get pvc -n "${OC_PROJECT}"
+
+# Secret が揃っていることを確認
+oc get secret -n "${OC_PROJECT}"
+
+# SCC が ServiceAccount に付与されていることを確認
+oc adm policy who-can use scc anyuid | grep collibra-dq-sa
+
+# チャートファイルの存在確認
+ls "${CHART_PATH}/Chart.yaml"
+```
+
+**デプロイ前の期待状態:**
+
+| リソース | 確認項目 |
+|---|---|
+| Project | `collibra-dq` が Active |
+| PVC | `dq-web-pvc` / `spark-scratch-pvc` / `dq-jdbc-drivers-pvc` が Bound |
+| Secret | `dq-pull-secret` / `dq-license-secret` / `dq-metastore-secret` / `dq-admin-secret` が存在 |
+| SCC | `collibra-dq-sa` に `anyuid` または カスタム SCC が付与済み |
+| Chart | `${CHART_PATH}/Chart.yaml` が存在 |
 
 ### 9.2 custom-values.yaml の作成（ARO 向け追加設定）
 
-AKS 版の values に加え、ARO 固有のパラメータ（`securityContext.runAsNonRoot`・`podSecurityContext.fsGroup` 等）を追加する。
+```bash
+cat <<EOF > ~/custom-values-aro.yaml
+global:
+  version:
+    dq: "${DQ_VERSION}"
+    spark: "${SPARK_VERSION}"
+
+  image:
+    repo: "${ACR_LOGIN_SERVER}/collibra"
+
+  web:
+    admin:
+      email: "${DQ_ADMIN_EMAIL}"
+      password: ""
+    service:
+      type: ClusterIP         # Route で公開するため ClusterIP
+    tls:
+      enabled: false          # Edge termination 時は無効（10章の Route で TLS 処理）
+
+  metastore:
+    host: "${METASTORE_HOST}"
+    port: "${METASTORE_PORT}"
+    db: "${METASTORE_DB}"
+    user: "${METASTORE_USER}"
+    existingSecret: dq-metastore-secret
+    existingSecretKey: password
+
+  persistence:
+    web:
+      storageClassName: azurefile-csi-rwx
+      existingClaim: dq-web-pvc
+
+# ARO 固有: SCC anyuid が付与された SA を使用
+serviceAccount:
+  name: collibra-dq-sa
+
+# ARO 固有: securityContext（restricted-v2 準拠）
+podSecurityContext:
+  runAsNonRoot: true
+  # fsGroup は省略（ARO が Project の UID 範囲から自動割り当て）
+
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL
+
+spark_scratch_type: persistentVolumeClaim
+spark_scratch_storage_class: azurefile-csi-rwx
+spark_scratch_storage_size: 20Gi
+
+imagePullSecrets:
+  - name: dq-pull-secret
+EOF
+```
 
 ### 9.3 helm upgrade --install コマンド
 
-ARO 向けのパラメータを指定した `helm upgrade --install` を実行する。
+```bash
+helm upgrade --install "${HELM_RELEASE_NAME}" "${CHART_PATH}" \
+  --namespace "${OC_PROJECT}" \
+  --values ~/custom-values-aro.yaml \
+  --set global.configMap.data.license_key="$(
+      oc get secret dq-license-secret -n ${OC_PROJECT} \
+        -o jsonpath='{.data.license_key}' | base64 -d)" \
+  --set global.configMap.data.license_name="$(
+      oc get secret dq-license-secret -n ${OC_PROJECT} \
+        -o jsonpath='{.data.license_name}' | base64 -d)" \
+  --set global.web.admin.password="$(
+      oc get secret dq-admin-secret -n ${OC_PROJECT} \
+        -o jsonpath='{.data.password}' | base64 -d)" \
+  --timeout 10m \
+  --wait
+```
+
+デプロイの進行を別ターミナルで確認する。
+
+```bash
+oc get pods -n "${OC_PROJECT}" --watch
+```
 
 ### 9.4 デプロイ状態の確認
 
-Pod・Service・PVC の状態を `oc get` コマンドで確認する。
+```bash
+# Pod・Service・PVC を一括確認
+oc get pod,svc,pvc -n "${OC_PROJECT}"
+
+# Helm リリース確認
+helm list -n "${OC_PROJECT}"
+```
+
+**正常時の Pod 一覧例:**
+
+```
+NAME                              READY   STATUS    RESTARTS   AGE
+collibra-dq-web-xxxxxxxxx-xxxxx   1/1     Running   0          3m
+collibra-dq-agent-xxxxxxx-xxxxx   1/1     Running   0          3m
+```
+
+SCC 違反で Pod が起動しない場合は以下を確認する。
+
+```bash
+oc describe pod <POD_NAME> -n "${OC_PROJECT}" | grep -A5 "Events:"
+# "unable to validate against any security context constraint" が出る場合は 6.1 節を再確認
+```
 
 ### 9.5 初期起動の確認
 
-DQ Web Pod のログを `oc logs` で確認し、正常起動を確認する。
+```bash
+# DQ Web のログ確認
+oc logs -n "${OC_PROJECT}" \
+  -l app=owl-web \
+  --tail=100 \
+  --follow
+
+# 正常起動時のキーワード
+# Started OwlApplication in xx.xxx seconds
+# Tomcat started on port(s): 9000
+
+# エラー抽出
+oc logs -n "${OC_PROJECT}" \
+  -l app=owl-web --tail=200 \
+  | grep -iE "error|exception|failed"
+```
 
 ---
 
 ## 10. ネットワーク・外部アクセスの設定
 
-> **AKS 版との最大の違い**: AKS では NGINX Ingress を使用するが、ARO では **OpenShift Route** を使用して外部アクセスを構成する。Route は ARO 組み込みの Router（HAProxy ベース）が処理するため、Ingress コントローラーの別途インストールは不要。
+> **AKS 版との最大の違い**: AKS では NGINX Ingress を別途インストールして使用するが、ARO では **OpenShift Route** を使用する。Route は ARO 組み込みの Router（HAProxy ベース）が自動処理するため、Ingress コントローラーのインストールは不要。
 
 ### 10.1 OpenShift Route の概要
 
-Route の TLS 終端方式（Edge / Passthrough / Re-encrypt）の違いと、ARO でのデフォルトドメイン（`*.apps.<cluster>.<domain>`）について説明する。
+ARO のデフォルトドメインを確認する。
+
+```bash
+# ARO のデフォルト Ingress ドメインを確認
+oc get ingresses.config.openshift.io cluster \
+  -o jsonpath='{.spec.domain}'
+# 例: apps.aro-collibra-dq.xxxx.japaneast.aroapp.io
+```
+
+Route を作成すると `<route名>.<project名>.<デフォルトドメイン>` の URL が自動で割り当てられる。
+
+**TLS 終端方式の選択:**
+
+| 方式 | 説明 | 証明書の場所 | 推奨場面 |
+|---|---|---|---|
+| Edge | Route で TLS を終端。Pod まで HTTP | Route に証明書を設定 | **本手順で採用（推奨）** |
+| Re-encrypt | Route と Pod の両方で TLS | Route + Pod（JKS） | E2E 暗号化が必要な場合 |
+| Passthrough | Route は TLS を透過。Pod で終端 | Pod（JKS） | Route で証明書を管理しない場合 |
 
 ### 10.2 Route リソースの作成
 
-DQ Web への外部アクセス用 Route を作成する（`oc expose` または YAML 直接適用）。
+#### Edge termination（推奨）
+
+ARO デフォルトの自己署名証明書を使用する場合（簡易設定）:
+
+```bash
+# oc expose で Service から Route を作成
+oc expose svc/collibra-dq-web \
+  --name=dq-web-route \
+  --port=9000 \
+  -n "${OC_PROJECT}"
+
+# 作成された Route の URL を確認
+oc get route dq-web-route -n "${OC_PROJECT}" \
+  -o jsonpath='{.spec.host}'
+```
+
+CA 署名済み証明書を使用する場合（本番推奨）:
+
+```bash
+oc apply -f - -n "${OC_PROJECT}" <<EOF
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: dq-web-route
+  namespace: ${OC_PROJECT}
+spec:
+  host: dq.example.internal          # カスタムホスト名（省略時は自動割り当て）
+  to:
+    kind: Service
+    name: collibra-dq-web
+  port:
+    targetPort: 9000
+  tls:
+    termination: edge
+    certificate: |                   # サーバー証明書（PEM 形式）
+      -----BEGIN CERTIFICATE-----
+      <証明書の内容>
+      -----END CERTIFICATE-----
+    key: |                           # 秘密鍵（PEM 形式）
+      -----BEGIN PRIVATE KEY-----
+      <秘密鍵の内容>
+      -----END PRIVATE KEY-----
+    caCertificate: |                 # CA 証明書（中間 CA がある場合）
+      -----BEGIN CERTIFICATE-----
+      <CA証明書の内容>
+      -----END CERTIFICATE-----
+    insecureEdgeTerminationPolicy: Redirect   # HTTP → HTTPS リダイレクト
+EOF
+```
+
+#### Re-encrypt termination（E2E 暗号化）
+
+```bash
+oc apply -f - -n "${OC_PROJECT}" <<EOF
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: dq-web-route
+  namespace: ${OC_PROJECT}
+spec:
+  host: dq.example.internal
+  to:
+    kind: Service
+    name: collibra-dq-web
+  port:
+    targetPort: 9000
+  tls:
+    termination: reencrypt
+    certificate: |
+      <Route の証明書（PEM）>
+    key: |
+      <Route の秘密鍵（PEM）>
+    destinationCACertificate: |      # Pod の証明書に署名した CA（検証用）
+      <Pod 側 CA 証明書（PEM）>
+    insecureEdgeTerminationPolicy: Redirect
+EOF
+```
+
+Route 作成を確認する。
+
+```bash
+oc get route -n "${OC_PROJECT}"
+```
+
+**期待される出力例:**
+
+```
+NAME            HOST/PORT                                              PATH   SERVICES          PORT   TERMINATION     WILDCARD
+dq-web-route    dq-web-route-collibra-dq.apps.aro-xxx.japaneast...           collibra-dq-web   9000   edge/Redirect   None
+```
 
 ### 10.3 カスタムドメインの設定（オプション）
 
-ARO デフォルトドメイン以外のカスタムドメインを使用する場合の設定を行う。
+ARO デフォルトドメイン（`*.apps.aro-xxx...`）以外のカスタムドメインを使用する場合、Route の `spec.host` にカスタムドメインを指定し、DNS に CNAME レコードを追加する。
+
+```bash
+# ARO Router の外部 IP / ホスト名を確認
+oc get svc router-default -n openshift-ingress \
+  -o jsonpath='{.status.loadBalancer.ingress[0].ip}'
+
+# DNS 設定例（社内 DNS 担当者に依頼）
+# dq.example.internal  CNAME  <Router の外部 IP または FQDN>
+```
 
 ### 10.4 DQ Web への外部アクセス確認
 
-Route の URL で DQ Web UI にアクセスできることを確認する。
+```bash
+# Route の URL を取得
+DQ_URL=$(oc get route dq-web-route -n "${OC_PROJECT}" \
+  -o jsonpath='{.spec.tls.termination == "edge" && "https" || "http"}://{.spec.host}/')
+DQ_URL="https://$(oc get route dq-web-route -n ${OC_PROJECT} -o jsonpath='{.spec.host}')"
+
+# HTTP ステータス確認
+curl -sk "${DQ_URL}" -o /dev/null -w "%{http_code}\n"
+# 期待値: 200
+
+echo "DQ Web URL: ${DQ_URL}"
+```
+
+ブラウザで `${DQ_URL}` を開き、Collibra DQ のログイン画面が表示されることを確認する。
 
 ---
 
