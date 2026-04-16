@@ -471,23 +471,170 @@ cat "${CHART_PATH}/values.yaml"
 
 ## 5. ストレージの設定
 
-> **背景**: Collibra DQ の DQ Web および Spark は永続ストレージを必要とする。AKS では Azure Files を利用した ReadWriteMany (RWX) 構成が推奨される。
+> **背景**: Collibra DQ の DQ Web および Spark は永続ストレージを必要とする。AKS では Azure Files を利用した ReadWriteMany (RWX) 構成が推奨される。Azure Disk（RWO）は単一 Pod からのアクセスのみで、複数 Pod が読み書きする Collibra DQ には適さない。
+
+**本章で作成するストレージリソースの一覧:**
+
+| リソース | 用途 | アクセスモード | サイズ |
+|---|---|---|---|
+| StorageClass `azurefile-csi-rwx` | DQ Web / Spark 共用 | ReadWriteMany | - |
+| PVC `dq-web-pvc` | DQ Web の設定・ログ永続化 | ReadWriteMany | 10Gi |
+| PVC `spark-scratch-pvc` | Spark の一時処理領域 | ReadWriteMany | 20Gi |
+| PVC `dq-jdbc-drivers-pvc` | JDBC ドライバー格納 | ReadWriteMany | 5Gi |
 
 ### 5.1 Azure Files ストレージクラスの確認
 
-AKS に組み込みの Azure Files ストレージクラスを確認し、必要に応じてカスタムストレージクラスを定義する。
+AKS に組み込みのストレージクラスを確認する。
+
+```bash
+kubectl get storageclass
+```
+
+**AKS の標準ストレージクラス一覧（抜粋）:**
+
+```
+NAME                     PROVISIONER                    RECLAIMPOLICY
+azurefile                kubernetes.io/azure-file       Delete
+azurefile-csi            file.csi.azure.com             Delete
+azurefile-csi-premium    file.csi.azure.com             Delete
+azuredisk-csi            disk.csi.azure.com             Delete
+```
+
+`azurefile-csi` は ReadWriteMany に対応しているが、SMB プロトコルを使用するため Linux コンテナの権限設定に注意が必要。本手順では NFS プロトコルを使用するカスタムストレージクラスを作成して使用する。
+
+**カスタムストレージクラス（NFS / ReadWriteMany）を作成する:**
+
+```bash
+cat <<EOF | kubectl apply -f -
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: azurefile-csi-rwx
+provisioner: file.csi.azure.com
+parameters:
+  protocol: nfs          # NFS プロトコルを使用（Linux 権限の問題を回避）
+  skuName: Premium_LRS   # NFS は Premium ストレージが必須
+reclaimPolicy: Retain    # PVC 削除後もデータを保持
+volumeBindingMode: Immediate
+allowVolumeExpansion: true
+EOF
+```
+
+確認する。
+
+```bash
+kubectl get storageclass azurefile-csi-rwx
+```
 
 ### 5.2 DQ Web 用 PVC 設定
 
-DQ Web コンポーネントが使用する PersistentVolumeClaim (PVC) を作成する。アクセスモードは ReadWriteMany を使用。
+DQ Web が設定ファイル・ログ等を永続化するための PVC を作成する。
+
+```bash
+cat <<EOF | kubectl apply -f - -n "${NAMESPACE}"
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: dq-web-pvc
+  namespace: ${NAMESPACE}
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: azurefile-csi-rwx
+  resources:
+    requests:
+      storage: 10Gi
+EOF
+```
+
+PVC がバインドされるまで待機して確認する。
+
+```bash
+kubectl get pvc dq-web-pvc -n "${NAMESPACE}" --watch
+```
+
+**期待される出力（STATUS が Bound になること）:**
+
+```
+NAME          STATUS   VOLUME                                     CAPACITY   ACCESS MODES   STORAGECLASS        AGE
+dq-web-pvc    Bound    pvc-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx   10Gi       RWX            azurefile-csi-rwx   30s
+```
 
 ### 5.3 Spark Scratch Disk 用 PVC 設定
 
-大規模データ処理時に Spark が使用するスクラッチディスク用の PVC を設定する（デフォルト 20Gi、用途に応じて拡大）。
+Spark が大規模データ処理時にメモリとディスク間でデータをスピルする一時領域として使用する PVC を作成する。処理するデータ量に応じてサイズを調整すること（デフォルト 20Gi）。
 
-### 5.4 JDBC ドライバー用 PV/PVC 設定
+```bash
+cat <<EOF | kubectl apply -f - -n "${NAMESPACE}"
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: spark-scratch-pvc
+  namespace: ${NAMESPACE}
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: azurefile-csi-rwx
+  resources:
+    requests:
+      storage: 20Gi   # 大規模ジョブの場合は 50Gi 以上を推奨
+EOF
+```
 
-各種データソースへの接続に使用する JDBC ドライバーを格納するための PV/PVC を設定する。
+```bash
+kubectl get pvc spark-scratch-pvc -n "${NAMESPACE}"
+```
+
+### 5.4 JDBC ドライバー用 PVC 設定
+
+各種データソース（SQL Server、Oracle、Snowflake 等）への接続に使用する JDBC ドライバーを格納するための PVC を作成する。
+
+```bash
+cat <<EOF | kubectl apply -f - -n "${NAMESPACE}"
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: dq-jdbc-drivers-pvc
+  namespace: ${NAMESPACE}
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: azurefile-csi-rwx
+  resources:
+    requests:
+      storage: 5Gi
+EOF
+```
+
+**JDBC ドライバーのアップロード（初回のみ）:**
+
+DQ Web Pod 起動後、以下の手順でドライバー JAR ファイルを PVC にコピーする。
+
+```bash
+# Pod 名を取得
+DQ_WEB_POD=$(kubectl get pod -n "${NAMESPACE}" -l app=owl-web -o jsonpath='{.items[0].metadata.name}')
+
+# ローカルの JAR ファイルを Pod 内の JDBC ドライバーディレクトリにコピー
+kubectl cp ./drivers/mssql-jdbc.jar \
+  "${NAMESPACE}/${DQ_WEB_POD}:/opt/owl/drivers/mssql-jdbc.jar"
+```
+
+> **補足**: DQ 標準で同梱されるドライバー（PostgreSQL / MySQL / Snowflake / Redshift 等）は追加コピー不要。オプションドライバー（Athena / BigQuery / Databricks 等）のみ追加が必要。
+
+**全 PVC の状態まとめ確認:**
+
+```bash
+kubectl get pvc -n "${NAMESPACE}"
+```
+
+**期待される出力（全て Bound）:**
+
+```
+NAME                   STATUS   VOLUME     CAPACITY   ACCESS MODES   STORAGECLASS        AGE
+dq-web-pvc             Bound    pvc-xxx    10Gi       RWX            azurefile-csi-rwx   2m
+spark-scratch-pvc      Bound    pvc-yyy    20Gi       RWX            azurefile-csi-rwx   1m
+dq-jdbc-drivers-pvc    Bound    pvc-zzz    5Gi        RWX            azurefile-csi-rwx   30s
+```
 
 ---
 
