@@ -596,3 +596,375 @@ ls -la "${OWL_BASE}/owlmanage.sh" \
 > ```bash
 > sudo restorecon -Rv "${OWL_BASE}"
 > ```
+
+---
+
+## 6. 認証・シークレットの設定
+
+### 6.1 ライセンスキーの設定
+
+`owl-env.sh` にライセンス情報を設定する。ライセンスキー・ライセンス名は Collibra ライセンスメールに記載されている。
+
+```bash
+# owl-env.sh を編集
+sudo vi "${OWL_BASE}/config/owl-env.sh"
+```
+
+以下の行を追記・編集する:
+
+```bash
+# ===== ライセンス =====
+export OWL_LICENSE_KEY="<Collibraから提供されたライセンスキー>"
+export OWL_LICENSE_NAME="<Collibraから提供されたライセンス名>"
+```
+
+### 6.2 パスワードの暗号化
+
+`owl.properties` に記載するメタストアのパスワードは、平文ではなく `owlmanage.sh encrypt` で暗号化した値を使用する。
+
+```bash
+cd "${OWL_BASE}"
+
+# パスワードを暗号化（出力された文字列をコピーしておく）
+./owlmanage.sh encrypt="${METASTORE_PASS}"
+# 出力例: ENC(XXXXXXXXXXXXXXXXXXXXXXXXX)
+```
+
+> 出力された `ENC(...)` 形式の文字列を次節の `owl.properties` に設定する。
+
+### 6.3 owl-env.sh の主要設定
+
+`owl-env.sh` は DQ の起動パラメータを一元管理する設定ファイルである。以下を参考に必要な項目を設定する。
+
+```bash
+sudo vi "${OWL_BASE}/config/owl-env.sh"
+```
+
+```bash
+# ===== ライセンス =====
+export OWL_LICENSE_KEY="<ライセンスキー>"
+export OWL_LICENSE_NAME="<ライセンス名>"
+
+# ===== パス =====
+export OWL_BASE=/opt/owl
+export SPARK_HOME="${OWL_BASE}/spark"
+export JAVA_HOME=/usr/lib/jvm/java-17-openjdk   # 3章で確認したパスを設定
+
+# ===== Java 17 対応オプション（2025.02 以降必須） =====
+export EXTRA_JVM_OPTIONS="--add-opens java.base/java.util=ALL-UNNAMED \
+  --add-opens java.base/java.lang.invoke=ALL-UNNAMED \
+  --add-opens java.base/java.util.concurrent=ALL-UNNAMED \
+  --add-opens java.base/sun.util.calendar=ALL-UNNAMED"
+
+# ===== DQ Web ポート =====
+export SERVER_PORT=9000
+
+# ===== メモリ（VM サイズに応じて調整） =====
+export HEAP_MIN_SIZE=2g
+export HEAP_MAX_SIZE=8g
+
+# ===== ログ =====
+export LOG_DIR="${OWL_BASE}/logs"
+export LOG_LEVEL=INFO
+
+# ===== コネクションプーリング =====
+export SPRING_DATASOURCE_TOMCAT_MAXACTIVE=20
+export SPRING_DATASOURCE_TOMCAT_MAXIDLE=10
+export SPRING_DATASOURCE_TOMCAT_MAXWAIT=30000
+
+# ===== マルチテナント（デフォルト: 無効） =====
+export MULTITENANTMODE=FALSE
+```
+
+**HEAP サイズの目安（VM RAM の 25〜30% を目安に設定）:**
+
+| VM RAM | HEAP_MAX_SIZE の目安 |
+|---|---|
+| 128 GB（Standard_E16s_v5） | 32g |
+| 256 GB（Standard_E32s_v5） | 64g |
+| 512 GB（Standard_E64s_v5） | 128g |
+
+### 6.4 Azure Key Vault との統合（推奨）
+
+本番環境では、ライセンスキーやパスワード類を Azure Key Vault で管理し、起動時にシェルスクリプトで取得する構成を推奨する。
+
+#### Managed Identity の割り当て
+
+```bash
+# VM にシステム割り当て Managed Identity を有効化
+az vm identity assign \
+  --resource-group "${RG_NAME}" \
+  --name "${VM_NAME}"
+
+# Managed Identity の Principal ID を取得
+PRINCIPAL_ID=$(az vm show \
+  --resource-group "${RG_NAME}" \
+  --name "${VM_NAME}" \
+  --query identity.principalId \
+  --output tsv)
+
+echo "Principal ID: ${PRINCIPAL_ID}"
+```
+
+#### Key Vault へのアクセス権限付与
+
+```bash
+KEY_VAULT_NAME="<Key Vault 名>"
+
+# Managed Identity に Key Vault シークレット読み取り権限を付与
+az keyvault set-policy \
+  --name "${KEY_VAULT_NAME}" \
+  --object-id "${PRINCIPAL_ID}" \
+  --secret-permissions get list
+```
+
+#### Key Vault へのシークレット登録
+
+```bash
+# ライセンスキーの登録
+az keyvault secret set \
+  --vault-name "${KEY_VAULT_NAME}" \
+  --name "dq-license-key" \
+  --value "<ライセンスキー>"
+
+# ライセンス名の登録
+az keyvault secret set \
+  --vault-name "${KEY_VAULT_NAME}" \
+  --name "dq-license-name" \
+  --value "<ライセンス名>"
+
+# メタストアパスワードの登録（平文で登録し、VM 上で暗号化する）
+az keyvault secret set \
+  --vault-name "${KEY_VAULT_NAME}" \
+  --name "dq-metastore-pass" \
+  --value "<メタストアパスワード>"
+```
+
+#### 起動前スクリプトで Key Vault から取得
+
+DQ 起動前に Key Vault からシークレットを取得し `owl-env.sh` に反映するラッパースクリプトを作成する。
+
+```bash
+sudo tee /opt/owl/start-with-keyvault.sh <<'SCRIPT'
+#!/bin/bash
+KEY_VAULT_NAME="<Key Vault 名>"
+
+# Key Vault からシークレットを取得して環境変数に設定
+export OWL_LICENSE_KEY=$(az keyvault secret show \
+  --vault-name "${KEY_VAULT_NAME}" \
+  --name "dq-license-key" \
+  --query value --output tsv)
+
+export OWL_LICENSE_NAME=$(az keyvault secret show \
+  --vault-name "${KEY_VAULT_NAME}" \
+  --name "dq-license-name" \
+  --query value --output tsv)
+
+# DQ を起動
+/opt/owl/owlmanage.sh start
+SCRIPT
+
+sudo chmod +x /opt/owl/start-with-keyvault.sh
+```
+
+---
+
+## 7. SSL/HTTPS 設定
+
+DQ Web はデフォルトで HTTP（ポート 9000）で起動する。社内通信であっても HTTPS を有効化することを推奨する。
+
+> **AKS / ARO との違い**: AKS では NGINX Ingress Controller が TLS 終端を担うが、スタンドアロンでは **VM の DQ Web プロセス自身が直接 TLS 終端を行う**。Ingress や Route の設定は不要。
+
+### 7.1 証明書ディレクトリの作成
+
+```bash
+sudo mkdir -p "${OWL_BASE}/certs"
+sudo chmod 750 "${OWL_BASE}/certs"
+```
+
+### 7.2 キーストアの作成
+
+#### パターン A: 自己署名証明書（PoC・検証環境向け）
+
+```bash
+sudo keytool -genkey \
+  -alias dq-server \
+  -keystore "${OWL_BASE}/certs/keystore.p12" \
+  -storetype PKCS12 \
+  -keyalg RSA \
+  -keysize 2048 \
+  -validity 365 \
+  -storepass "<キーストアパスワード>" \
+  -dname "CN=<VMのFQDNまたはIPアドレス>, OU=IT, O=<組織名>, L=Tokyo, ST=Tokyo, C=JP"
+
+# 確認
+sudo keytool -list \
+  -keystore "${OWL_BASE}/certs/keystore.p12" \
+  -storetype PKCS12 \
+  -storepass "<キーストアパスワード>"
+```
+
+#### パターン B: CA 署名済み証明書（本番環境向け）
+
+社内 CA または公的 CA から発行された証明書（PEM 形式）を PKCS12 形式に変換する。
+
+```bash
+# PEM 形式の証明書・秘密鍵を PKCS12 に変換
+sudo openssl pkcs12 -export \
+  -in /path/to/server.crt \
+  -inkey /path/to/server.key \
+  -certfile /path/to/ca-chain.crt \
+  -out "${OWL_BASE}/certs/keystore.p12" \
+  -name "dq-server" \
+  -passout pass:"<キーストアパスワード>"
+
+# ファイルのパーミッション設定
+sudo chmod 640 "${OWL_BASE}/certs/keystore.p12"
+```
+
+### 7.3 owl-env.sh への SSL 設定追記
+
+```bash
+sudo vi "${OWL_BASE}/config/owl-env.sh"
+```
+
+以下を追記する:
+
+```bash
+# ===== SSL/HTTPS =====
+export SERVER_HTTPS_ENABLED=true
+export SERVER_HTTP_ENABLED=false            # HTTP を完全に無効化する場合は false
+export SERVER_SSL_KEY_TYPE=PKCS12
+export SERVER_SSL_KEY_STORE="${OWL_BASE}/certs/keystore.p12"
+export SERVER_SSL_KEY_STORE_PASSWORD="<キーストアパスワード>"
+export SERVER_SSL_KEY_ALIAS=dq-server
+```
+
+> `SERVER_HTTP_ENABLED=true` のままにすると HTTP と HTTPS の両方が有効になる。本番環境では `false` を推奨する。
+
+### 7.4 設定後の確認コマンド
+
+DQ 起動後（9章参照）に以下で HTTPS 接続を確認する。
+
+```bash
+# HTTPS でのヘルスチェック（自己署名証明書の場合は -k オプションが必要）
+curl -sk https://localhost:${DQ_WEB_PORT}/dq/api/v1/health
+# 期待値: {"status":"UP"} または 200 OK のレスポンス
+
+# 証明書の詳細確認
+echo | openssl s_client \
+  -connect localhost:${DQ_WEB_PORT} \
+  -showcerts 2>/dev/null \
+  | openssl x509 -noout -dates -subject
+```
+
+---
+
+## 8. 外部メタストア（PostgreSQL）接続設定
+
+### 8.1 疎通確認
+
+設定前に VM から Metastore への接続が可能であることを確認する。
+
+```bash
+# TCP 接続確認
+nc -zv "${METASTORE_HOST}" "${METASTORE_PORT}"
+# 期待値: Connection to <host> 5432 port [tcp/postgresql] succeeded!
+
+# psql でログイン確認（postgresql クライアントが必要）
+sudo dnf install -y postgresql
+psql \
+  "host=${METASTORE_HOST} port=${METASTORE_PORT} dbname=${METASTORE_DB} \
+   user=${METASTORE_USER} sslmode=require" \
+  -c "\conninfo"
+# 期待値: 接続情報が表示されること
+```
+
+### 8.2 フルインストール時のみ: Metastore DB・ユーザーの初期作成
+
+**Agent Only 構成の場合、グループ会社側で Metastore が既に存在するためこの手順は不要。**
+
+フルインストールで新規に Metastore を作成する場合のみ実施する。
+
+```sql
+-- Azure DB for PostgreSQL に接続して実行
+-- ロールの作成
+CREATE ROLE owluser WITH LOGIN PASSWORD '<平文パスワード>';
+ALTER ROLE owluser CREATEDB;
+ALTER ROLE owluser CREATEROLE;
+
+-- データベースの作成
+CREATE DATABASE owlmetastore OWNER owluser;
+
+-- 権限付与
+GRANT ALL PRIVILEGES ON DATABASE owlmetastore TO owluser;
+\c owlmetastore
+GRANT ALL PRIVILEGES ON SCHEMA public TO owluser;
+```
+
+### 8.3 owl.properties の接続設定
+
+```bash
+sudo vi "${OWL_BASE}/config/owl.properties"
+```
+
+**Agent Only 構成（本プロジェクト推奨）の設定:**
+
+```properties
+# ライセンス（owl-env.sh の OWL_LICENSE_NAME と同じ値）
+owldomain=<ライセンス名>
+
+# DQ Agent のメタストア接続
+spring.agent.datasource.url=jdbc:postgresql://<METASTORE_HOST>:5432/owlmetastore\
+?currentSchema=public&sslmode=require
+spring.agent.datasource.username=<METASTORE_USER>
+spring.agent.datasource.password=ENC(<6章で暗号化したパスワード>)
+spring.agent.datasource.driver-class-name=org.postgresql.Driver
+```
+
+**フルインストール構成（DQ Web も自社 VM の場合）の追加設定:**
+
+```properties
+# DQ Web のメタストア接続（フルインストール時は DQ Web 用も設定）
+spring.datasource.url=jdbc:postgresql://<METASTORE_HOST>:5432/owlmetastore\
+?currentSchema=public&sslmode=require
+spring.datasource.username=<METASTORE_USER>
+spring.datasource.password=ENC(<6章で暗号化したパスワード>)
+spring.datasource.driver-class-name=org.postgresql.Driver
+```
+
+**JDBC 接続文字列の `sslmode` 値:**
+
+| sslmode | 説明 | 推奨場面 |
+|---|---|---|
+| `require` | SSL 必須（証明書検証なし） | Azure DB for PostgreSQL（**本手順での推奨値**） |
+| `verify-ca` | CA 証明書を検証 | 社内 CA を使用する場合 |
+| `verify-full` | CA 証明書 + ホスト名を検証 | より厳格なセキュリティが必要な場合 |
+| `disable` | SSL 無効 | ローカル開発環境のみ |
+
+### 8.4 Managed Identity によるパスワードレス認証（オプション）
+
+Azure DB for PostgreSQL Flexible Server は Microsoft Entra ID（旧 Azure AD）認証に対応している。Managed Identity を使用することで、パスワードをファイルに保存せずに接続できる。
+
+```bash
+# VM の Managed Identity に PostgreSQL へのアクセスを許可（Azure Portal または az CLI）
+az postgres flexible-server ad-admin set \
+  --resource-group "${RG_NAME}" \
+  --server-name "<PostgreSQL サーバー名>" \
+  --display-name "${VM_NAME}" \
+  --object-id "${PRINCIPAL_ID}"
+```
+
+> Managed Identity 認証を使用する場合、`owl.properties` のパスワード設定は不要になるが、JDBC ドライバの設定変更が別途必要。詳細は [Azure Database for PostgreSQL - Microsoft Entra 認証](https://learn.microsoft.com/ja-jp/azure/postgresql/flexible-server/how-to-configure-sign-in-azure-ad-authentication) を参照すること。
+
+### 8.5 設定の確認
+
+DQ 起動前に設定ファイルを最終確認する。
+
+```bash
+# owl.properties の確認（パスワードが ENC(...) 形式になっていること）
+grep -E "datasource\.(url|username|password)" "${OWL_BASE}/config/owl.properties"
+
+# owl-env.sh の確認（ライセンスキーが設定されていること）
+grep -E "OWL_LICENSE|SERVER_PORT|HEAP" "${OWL_BASE}/config/owl-env.sh"
+```
