@@ -1331,35 +1331,311 @@ kubectl logs -n "${NAMESPACE}" \
 
 ## 10. ネットワーク・外部アクセスの設定
 
-### 10.1 Ingress コントローラー（NGINX）設定
+> **背景**: 9章のデプロイでは DQ Web の Service タイプを `ClusterIP` にしたため、クラスター外からはアクセスできない。本章では NGINX Ingress コントローラーを使用して外部アクセスを構成する。
 
-NGINX Ingress コントローラーを使用した Ingress リソースを作成し、DQ Web への HTTP/HTTPS アクセスを構成する。
+**サービスタイプの選択指針:**
 
-### 10.2 サービスタイプの選択と設定
+| タイプ | 用途 | 本環境での採用 |
+|---|---|---|
+| ClusterIP + Ingress | プライベートクラスター・エンタープライズ標準 | **推奨（本手順）** |
+| LoadBalancer | パブリッククラスターで簡易に公開 | 非推奨（プライベートクラスターのため） |
+| NodePort | 開発・検証のみ | 非推奨 |
 
-環境に応じたサービスタイプ（ClusterIP + Ingress / LoadBalancer / NodePort）を選択し、設定を適用する。
+### 10.1 NGINX Ingress コントローラーのインストール
 
-### 10.3 DQ Web への外部アクセス確認
+```bash
+# ingress-nginx の Helm リポジトリを追加
+helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx
+helm repo update
 
-設定した URL または IP アドレスで DQ Web UI へのアクセスが正常に行えることを確認する。
+# Internal LoadBalancer（プライベート IP）として NGINX をデプロイ
+helm upgrade --install ingress-nginx ingress-nginx/ingress-nginx \
+  --namespace ingress-nginx \
+  --create-namespace \
+  --set controller.service.annotations."service\.beta\.kubernetes\.io/azure-load-balancer-internal"=true \
+  --set controller.service.loadBalancerIP="" \
+  --set controller.replicaCount=2 \
+  --wait
+```
+
+Internal LoadBalancer の IP が払い出されるまで待機して確認する。
+
+```bash
+kubectl get svc -n ingress-nginx ingress-nginx-controller --watch
+```
+
+**期待される出力例（EXTERNAL-IP にプライベート IP が表示）:**
+
+```
+NAME                       TYPE           CLUSTER-IP     EXTERNAL-IP   PORT(S)
+ingress-nginx-controller   LoadBalancer   172.16.x.x     10.1.x.x      80:xxxxx/TCP,443:xxxxx/TCP
+```
+
+```bash
+# Ingress コントローラーの IP を変数に保存
+INGRESS_IP=$(kubectl get svc ingress-nginx-controller \
+  -n ingress-nginx \
+  -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+echo "Ingress IP: ${INGRESS_IP}"
+```
+
+### 10.2 Ingress リソースの作成
+
+DQ Web へのアクセスルールを定義する Ingress リソースを作成する。
+
+#### HTTPS（TLS termination あり）の場合
+
+```bash
+cat <<EOF | kubectl apply -f - -n "${NAMESPACE}"
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: dq-web-ingress
+  namespace: ${NAMESPACE}
+  annotations:
+    nginx.ingress.kubernetes.io/backend-protocol: "HTTPS"   # DQ Web 側も HTTPS の場合
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-body-size: "0"
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - dq.example.internal          # 社内 DNS に登録するホスト名
+      secretName: dq-ssl-secret        # 7章で作成した TLS Secret
+  rules:
+    - host: dq.example.internal
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: collibra-dq-web  # Helm が作成した Service 名
+                port:
+                  number: 9000
+EOF
+```
+
+#### HTTP のみ（検証環境）の場合
+
+```bash
+cat <<EOF | kubectl apply -f - -n "${NAMESPACE}"
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: dq-web-ingress
+  namespace: ${NAMESPACE}
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: dq.example.internal
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: collibra-dq-web
+                port:
+                  number: 9000
+EOF
+```
+
+Ingress リソースの確認。
+
+```bash
+kubectl get ingress -n "${NAMESPACE}"
+kubectl describe ingress dq-web-ingress -n "${NAMESPACE}"
+```
+
+### 10.3 DNS 設定と外部アクセス確認
+
+社内 DNS に Ingress IP のAレコードを登録する（DNS 管理者に依頼）。
+
+```
+dq.example.internal  A  10.1.x.x（Ingress IP）
+```
+
+DNS 登録後、管理用 VM または社内端末からアクセスを確認する。
+
+```bash
+# 名前解決の確認
+nslookup dq.example.internal
+
+# HTTP アクセス確認（curl）
+curl -sk https://dq.example.internal/ | head -20
+
+# ブラウザアクセス
+# https://dq.example.internal/
+```
+
+**期待される応答:**
+
+```html
+<!DOCTYPE html>
+<html>
+  <head><title>Collibra Data Quality</title>
+  ...
+```
+
+> **補足**: DNS 登録が完了するまでの間は `/etc/hosts`（Linux）または `C:\Windows\System32\drivers\etc\hosts`（Windows）に一時的にエントリを追加して確認できる。
 
 ---
 
 ## 11. DQ Agent の設定
 
-> **背景**: DQ Agent は Collibra DQ Web と連携し、Spark ジョブのオーケストレーションを担う。AKS 環境では Agent も Kubernetes 上で動作する。
+> **背景**: DQ Agent は Collibra DQ Web と連携し、Spark ジョブのオーケストレーションを担う。AKS 環境では Agent も Kubernetes 上で動作し、データ品質チェック時に Spark Driver / Executor Pod を動的に生成・破棄する。
 
-### 11.1 Agent 接続先の設定
+**DQ Agent の役割:**
 
-DQ Agent が接続する DQ Web のエンドポイント（ホスト名・ポート）を設定する。
+```
+DQ Web UI
+   │ REST API (ポート 9000)
+   ▼
+DQ Agent (ポート 9101)
+   │ Kubernetes API
+   ▼
+Spark Driver Pod（動的生成）
+   │
+   ├── Spark Executor Pod 1
+   ├── Spark Executor Pod 2
+   └── Spark Executor Pod N
+```
 
-### 11.2 Spark Executor 設定
+### 11.1 RBAC / ServiceAccount 設定
 
-Spark Driver・Executor の Pod スペック（CPU・メモリ）、イメージ、ネームスペース等を設定する。
+DQ Agent と Spark Driver が Pod の作成・削除を行うために必要な権限を付与する。Helm チャートが自動作成する場合は本節をスキップしてよいが、Edit ロールが利用できない制限環境では手動設定が必要。
 
-### 11.3 RBAC / サービスアカウント設定
+```bash
+cat <<EOF | kubectl apply -f - -n "${NAMESPACE}"
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: dq-agent-sa
+  namespace: ${NAMESPACE}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: dq-agent-role
+  namespace: ${NAMESPACE}
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "services", "configmaps", "secrets"]
+    verbs: ["get", "list", "create", "delete", "watch"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: dq-agent-rolebinding
+  namespace: ${NAMESPACE}
+subjects:
+  - kind: ServiceAccount
+    name: dq-agent-sa
+    namespace: ${NAMESPACE}
+roleRef:
+  kind: Role
+  apiGroup: rbac.authorization.k8s.io
+  name: dq-agent-role
+EOF
+```
 
-DQ Agent と Spark Driver が Pod の作成・削除権限を持つよう、ServiceAccount・Role・RoleBinding を設定する。
+確認する。
+
+```bash
+kubectl get role,rolebinding,serviceaccount -n "${NAMESPACE}"
+```
+
+### 11.2 Agent 接続先の設定
+
+DQ Agent が DQ Web に接続するためのエンドポイントを Helm values に設定する。`custom-values.yaml` に以下を追記する。
+
+```yaml
+# DQ Agent の設定（custom-values.yaml に追記）
+agent:
+  serviceAccount:
+    name: dq-agent-sa       # 11.1 で作成した ServiceAccount
+  config:
+    owlweb:
+      host: "collibra-dq-web.${NAMESPACE}.svc.cluster.local"
+      port: "9000"
+      protocol: "https"     # TLS 有効時は https
+    # Agent の待ち受けポート
+    port: "9101"
+```
+
+設定変更を Helm で反映する。
+
+```bash
+helm upgrade "${HELM_RELEASE_NAME}" "${CHART_PATH}" \
+  --namespace "${NAMESPACE}" \
+  --values ~/custom-values.yaml \
+  --reuse-values \
+  --wait
+```
+
+Agent Pod の起動確認。
+
+```bash
+kubectl get pods -n "${NAMESPACE}" -l app=owl-agent
+kubectl logs -n "${NAMESPACE}" -l app=owl-agent --tail=50
+```
+
+**Agent 正常接続時のログキーワード:**
+
+```
+Connected to DQ Web at https://collibra-dq-web:9000
+Agent is running on port 9101
+```
+
+### 11.3 Spark Executor 設定
+
+Spark Driver・Executor の Pod リソースとイメージを設定する。`custom-values.yaml` に以下を追記する。
+
+```yaml
+# Spark の設定（custom-values.yaml に追記）
+spark:
+  image: "${ACR_LOGIN_SERVER}/collibra/owl-spark:${SPARK_VERSION}"
+
+  # Spark Driver の設定
+  driver:
+    cores: 1
+    memory: "2g"
+    serviceAccount: dq-agent-sa
+
+  # Spark Executor の設定
+  executor:
+    cores: 2
+    memory: "4g"
+    instances: 2            # デフォルト Executor 数
+    # 大規模ジョブでは instances を増やす（dqpool の最大ノード数に依存）
+
+  # Spark Scratch Disk（5章で作成した PVC を参照）
+  scratchDisk:
+    type: persistentVolumeClaim
+    claimName: spark-scratch-pvc
+
+  # Spark が動作するネームスペース（Agent と同一）
+  namespace: "${NAMESPACE}"
+
+  # ノードプール指定（DQ 用ノードプール dqpool に配置）
+  nodeSelector:
+    agentpool: dqpool
+```
+
+Spark ジョブ実行時に Executor Pod が dqpool ノード上に生成されることを確認する（12章の動作確認で検証）。
+
+```bash
+# ジョブ実行中に Executor Pod を確認するコマンド
+kubectl get pods -n "${NAMESPACE}" | grep spark
+```
 
 ---
 
