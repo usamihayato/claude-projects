@@ -383,3 +383,216 @@ EOF
 ```
 
 > 上記は確認用の表示コマンドである。実際の設定は [6章 認証・シークレットの設定](#6-認証シークレットの設定) の `owl-env.sh` 編集で行う。
+
+---
+
+## 4. Collibra DQ パッケージの準備
+
+### 4.1 Collibra Product Resource Center からのダウンロード
+
+Collibra 社から提供されたアカウントで [Collibra Product Resource Center](https://productresources.collibra.com/) にログインし、インストールパッケージを取得する。
+
+**ダウンロード対象ファイル:**
+
+| ファイル | 説明 |
+|---|---|
+| `dq-full-package-2026.02.tar.gz` | DQ Web / DQ Agent / Spark を含むフルパッケージ |
+
+> パッケージのダウンロード URL・認証情報は Collibra ライセンスメールに記載されている。
+
+### 4.2 VM へのファイル転送
+
+ダウンロードしたパッケージを VM に転送する。方法は環境に応じて選択すること。
+
+#### 方法 A: scp で直接転送（推奨）
+
+```bash
+# ローカル端末から VM へ転送
+scp dq-full-package-${DQ_VERSION}.tar.gz \
+  <adminUser>@<VM_IPアドレス>:/tmp/
+```
+
+#### 方法 B: Azure Blob Storage 経由（大容量・帯域制限がある場合）
+
+```bash
+# ---- ローカル端末で実施 ----
+# Blob Storage へアップロード
+STORAGE_ACCOUNT="<ストレージアカウント名>"
+CONTAINER_NAME="collibra-packages"
+
+az storage container create \
+  --account-name "${STORAGE_ACCOUNT}" \
+  --name "${CONTAINER_NAME}" \
+  --auth-mode login
+
+az storage blob upload \
+  --account-name "${STORAGE_ACCOUNT}" \
+  --container-name "${CONTAINER_NAME}" \
+  --name "dq-full-package-${DQ_VERSION}.tar.gz" \
+  --file "dq-full-package-${DQ_VERSION}.tar.gz" \
+  --auth-mode login
+
+# SAS URL を生成（有効期限: 1時間）
+EXPIRY=$(date -u -d "1 hour" '+%Y-%m-%dT%H:%MZ')
+SAS_URL=$(az storage blob generate-sas \
+  --account-name "${STORAGE_ACCOUNT}" \
+  --container-name "${CONTAINER_NAME}" \
+  --name "dq-full-package-${DQ_VERSION}.tar.gz" \
+  --permissions r \
+  --expiry "${EXPIRY}" \
+  --full-uri \
+  --auth-mode login \
+  --as-user \
+  --output tsv)
+
+echo "${SAS_URL}"
+
+# ---- VM 上で実施 ----
+# SAS URL でダウンロード
+cd /tmp
+curl -o "dq-full-package-${DQ_VERSION}.tar.gz" "${SAS_URL}"
+```
+
+### 4.3 パッケージの展開
+
+```bash
+# 作業ディレクトリに移動
+cd /tmp
+
+# ファイルの整合性確認（SHA256 チェックサムが Collibra から提供されている場合）
+# sha256sum -c dq-full-package-${DQ_VERSION}.tar.gz.sha256
+
+# 展開
+tar -xvf dq-full-package-${DQ_VERSION}.tar.gz
+
+# 展開後のディレクトリへ移動
+cd dq
+
+# ディレクトリ構造の確認
+ls -la
+```
+
+**展開後のディレクトリ構造（例）:**
+
+```
+dq/
+├── setup.sh          # セットアップスクリプト（5章で実行）
+├── owlmanage.sh      # 起動・停止・暗号化スクリプト
+├── owlcheck.sh       # 動作確認スクリプト
+├── bin/              # DQ アプリケーション JAR ファイル
+├── config/           # 設定ファイルテンプレート
+├── spark/            # Spark バイナリ（同梱版）
+└── lib/              # 依存ライブラリ
+```
+
+### 4.4 スクリプトへの実行権限付与
+
+```bash
+chmod +x setup.sh owlmanage.sh owlcheck.sh
+
+# 確認
+ls -la setup.sh owlmanage.sh owlcheck.sh
+# -rwxr-xr-x が付いていること
+```
+
+---
+
+## 5. インストール（setup.sh の実行）
+
+### 5.1 インストールコマンド
+
+`setup.sh` は `-options` パラメータで構成するコンポーネントを指定する。本プロジェクトでは **Agent Only 構成を推奨**するが、フルインストールのコマンドも記載する。
+
+#### パターン A: Agent Only 構成（本プロジェクト推奨）
+
+グループ会社の DQ Web に接続し、Agent と Spark のみを自社 VM に構築する。
+
+```bash
+cd /tmp/dq
+
+./setup.sh \
+  -owlbase="${OWL_BASE}" \
+  -options=spark,owlagent \
+  -pguser="${METASTORE_USER}" \
+  -pgpassword="${METASTORE_PASS}" \
+  -pgserver="${METASTORE_HOST}:${METASTORE_PORT}/${METASTORE_DB}"
+```
+
+#### パターン B: フルインストール（DQ Web も自社 VM に構築する場合）
+
+```bash
+cd /tmp/dq
+
+./setup.sh \
+  -owlbase="${OWL_BASE}" \
+  -options=spark,owlweb,owlagent \
+  -pguser="${METASTORE_USER}" \
+  -pgpassword="${METASTORE_PASS}" \
+  -pgserver="${METASTORE_HOST}:${METASTORE_PORT}/${METASTORE_DB}"
+```
+
+### 5.2 setup.sh オプション引数一覧
+
+| パラメータ | 例 | 説明 |
+|---|---|---|
+| `-owlbase=` | `/opt/owl` | インストール先ディレクトリ（デフォルト: `/opt/owl`） |
+| `-options=` | `spark,owlweb,owlagent` | インストールするコンポーネント（カンマ区切り） |
+| `-pguser=` | `owluser` | メタストア PostgreSQL のユーザー名 |
+| `-pgpassword=` | `<password>` | メタストア PostgreSQL のパスワード |
+| `-pgserver=` | `host:5432/owlmetastore` | 外部 PostgreSQL の接続先（`ホスト:ポート/DB名` 形式） |
+| `-port=` | `9000` | DQ Web のポート番号（デフォルト: `9000`） |
+| `-user=` | `ec2-user` | インストール実行ユーザー（デフォルト: 現在のユーザー） |
+
+**`-options=` に指定できる値:**
+
+| 値 | コンポーネント | 説明 |
+|---|---|---|
+| `spark` | Spark | データ品質処理基盤（Spark Standalone Master + Worker）。Agent と組み合わせて使用 |
+| `owlagent` | DQ Agent | ジョブ実行エンジン。メタストアをポーリングしてジョブを取得・実行 |
+| `owlweb` | DQ Web | Web UI / REST API サーバー（フルインストール時のみ指定） |
+| `postgres` | 内部 PostgreSQL | VM 内に PostgreSQL を構築する場合（外部 Metastore を使用する本手順では**不要**） |
+
+### 5.3 インストール完了の確認
+
+```bash
+# インストール先ディレクトリの構造確認
+ls -la "${OWL_BASE}/"
+```
+
+**期待されるディレクトリ構造:**
+
+```
+/opt/owl/
+├── owlmanage.sh          # 起動・停止スクリプト
+├── owlcheck.sh           # 動作確認スクリプト
+├── bin/                  # DQ アプリケーション JAR
+├── config/
+│   ├── owl-env.sh        # 環境変数・起動設定（6章で編集）
+│   ├── owl.properties    # メタストア接続設定（8章で編集）
+│   └── agent.properties  # Agent・Spark 設定（11章で編集）
+├── logs/                 # ログ出力先
+└── spark/                # Spark バイナリ
+    ├── bin/
+    ├── sbin/
+    └── conf/
+```
+
+```bash
+# 主要ファイルの存在確認
+ls -la "${OWL_BASE}/owlmanage.sh" \
+       "${OWL_BASE}/config/owl-env.sh" \
+       "${OWL_BASE}/config/owl.properties"
+
+# Spark バイナリの確認
+"${OWL_BASE}/spark/bin/spark-submit" --version
+# 期待値例: version 4.1.0
+```
+
+### 5.4 インストール後の注意事項
+
+> **パスワードについて**: `setup.sh` の `-pgpassword` に指定したパスワードは `owl.properties` に平文で記録される場合がある。6章の手順に従い、`owlmanage.sh encrypt` で必ず暗号化すること。
+
+> **SELinux について**: SELinux が `Enforcing` の場合、`${OWL_BASE}` 配下のファイルに適切なコンテキストを付与する必要がある。
+> ```bash
+> sudo restorecon -Rv "${OWL_BASE}"
+> ```
