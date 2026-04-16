@@ -968,3 +968,378 @@ grep -E "datasource\.(url|username|password)" "${OWL_BASE}/config/owl.properties
 # owl-env.sh の確認（ライセンスキーが設定されていること）
 grep -E "OWL_LICENSE|SERVER_PORT|HEAP" "${OWL_BASE}/config/owl-env.sh"
 ```
+
+---
+
+## 9. サービスの起動設定
+
+### 9.1 初回起動
+
+すべての設定ファイルが整ったら DQ を起動する。
+
+```bash
+cd "${OWL_BASE}"
+
+# 起動
+./owlmanage.sh start
+
+# 停止
+./owlmanage.sh stop
+
+# 再起動
+./owlmanage.sh restart
+```
+
+**起動ログのリアルタイム確認:**
+
+```bash
+tail -f "${OWL_BASE}/logs/owl-web.log"
+```
+
+**起動完了の目安となるログ出力:**
+
+```
+Started OwlApplication in XX.XXX seconds (JVM running for XX.XXX)
+```
+
+> 初回起動時はメタストアのスキーマ初期化が実行されるため、通常より時間がかかる（2〜5分程度）。
+
+**Spark Master / Worker の起動確認:**
+
+```bash
+# Spark Master プロセス確認
+ps -ef | grep -i "spark.*Master" | grep -v grep
+
+# Spark Worker プロセス確認
+ps -ef | grep -i "spark.*Worker" | grep -v grep
+```
+
+### 9.2 agent.properties の確認・設定
+
+`agent.properties` は初回起動時に自動生成される。必要に応じて以下を確認・編集する。
+
+```bash
+# 初回起動後に生成されたことを確認
+ls -la "${OWL_BASE}/config/agent.properties"
+
+# 内容を確認・編集
+sudo vi "${OWL_BASE}/config/agent.properties"
+```
+
+**主要設定項目:**
+
+```properties
+# Spark 実行設定
+sparksubmitmode=native
+sparkhome=/opt/owl/spark
+sparkmaster=spark://<VMのIPアドレス>:7077
+
+# Spark Executor リソース設定（VM サイズに応じて調整）
+numExecutors=4
+executorMemory=16g
+executorCores=4
+driverMemory=4g
+
+# メタストア接続（owl.properties と同じ値）
+metastorehost=<METASTORE_HOST>
+metastoreport=5432
+metastoredb=owlmetastore
+metastoreuser=<METASTORE_USER>
+metastorepassword=ENC(<暗号化済みパスワード>)
+
+# Agent 識別子（複数 Agent を使用する場合は一意の値を設定）
+agentid=1
+```
+
+**Executor リソース設定の目安（`Standard_E32s_v5` / 32 vCPU・256 GB RAM の場合）:**
+
+| 設定項目 | 値 | 説明 |
+|---|---|---|
+| `numExecutors` | 4 | 同時起動する Spark Executor 数 |
+| `executorMemory` | 16g | Executor 1つあたりのメモリ |
+| `executorCores` | 4 | Executor 1つあたりのコア数 |
+| `driverMemory` | 4g | Spark Driver のメモリ |
+
+> `numExecutors × executorMemory` が VM の使用可能メモリを超えないように設定すること。
+
+### 9.3 systemd サービスへの登録
+
+OS 再起動時に DQ が自動起動するよう systemd に登録する。
+
+```bash
+# サービスファイルを作成
+sudo tee /etc/systemd/system/collibra-dq.service <<EOF
+[Unit]
+Description=Collibra DQ Service
+After=network.target
+
+[Service]
+Type=forking
+User=$(whoami)
+WorkingDirectory=${OWL_BASE}
+ExecStart=${OWL_BASE}/owlmanage.sh start
+ExecStop=${OWL_BASE}/owlmanage.sh stop
+TimeoutStartSec=300
+TimeoutStopSec=60
+Restart=on-failure
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# systemd に登録・自動起動を有効化
+sudo systemctl daemon-reload
+sudo systemctl enable collibra-dq
+
+# 手動で起動テスト
+sudo systemctl start collibra-dq
+
+# ステータス確認
+sudo systemctl status collibra-dq
+```
+
+**期待される出力（起動成功時）:**
+
+```
+● collibra-dq.service - Collibra DQ Service
+   Loaded: loaded (/etc/systemd/system/collibra-dq.service; enabled; ...)
+   Active: active (running) since ...
+```
+
+### 9.4 Active-Standby 2台構成の起動手順（冗長化オプション A）
+
+2台構成を採用する場合、通常は vm-collibra-dq-1 のみ起動した状態で運用し、障害時に vm-collibra-dq-2 を起動する。
+
+```bash
+# ---- vm-collibra-dq-1（Active）で実施 ----
+sudo systemctl start collibra-dq
+sudo systemctl status collibra-dq
+
+# ---- vm-collibra-dq-2（Standby）で実施 ----
+# Standby では DQ サービスを停止状態にしておく
+sudo systemctl stop collibra-dq
+sudo systemctl disable collibra-dq   # 自動起動は無効（手動フェイルオーバー時のみ起動）
+```
+
+> Azure Internal Load Balancer の Health Probe（TCP 9000）により、Active VM がダウンした際にトラフィックが自動的に Standby へ切り替わる。切り替わり後、Standby VM 上で `sudo systemctl start collibra-dq` を手動実行すること。
+
+---
+
+## 10. ネットワーク・外部アクセスの設定
+
+### 10.1 ポート開放の最終確認
+
+DQ 起動後、必要なポートが LISTEN 状態になっていることを確認する。
+
+```bash
+# LISTEN ポートの確認
+ss -tlnp | grep -E "9000|8080|7077"
+```
+
+**期待される出力:**
+
+```
+LISTEN  0  128  0.0.0.0:9000   0.0.0.0:*  users:(("java",pid=XXXX,...))
+LISTEN  0  128  0.0.0.0:8080   0.0.0.0:*  users:(("java",pid=XXXX,...))  # Spark Cluster UI
+LISTEN  0  128  0.0.0.0:7077   0.0.0.0:*  users:(("java",pid=XXXX,...))  # Spark Master
+```
+
+**VM 自身からのヘルスチェック:**
+
+```bash
+# HTTP の場合
+curl -s http://localhost:${DQ_WEB_PORT}/dq/api/v1/health
+
+# HTTPS の場合（7章で SSL を有効化した場合）
+curl -sk https://localhost:${DQ_WEB_PORT}/dq/api/v1/health
+# 期待値: {"status":"UP"} または 200 OK
+```
+
+### 10.2 社内端末からのアクセス確認
+
+#### VM の IP アドレス・FQDN 確認
+
+```bash
+# Azure CLI で VM のプライベート IP を確認
+az vm show \
+  --resource-group "${RG_NAME}" \
+  --name "${VM_NAME}" \
+  --show-details \
+  --query privateIps \
+  --output tsv
+```
+
+#### 社内端末からの接続確認
+
+```bash
+# 社内端末（Windows PowerShell / Mac ターミナル）から実行
+# HTTP の場合
+curl http://<VMのプライベートIP>:9000/dq/api/v1/health
+
+# HTTPS の場合
+curl -sk https://<VMのプライベートIP>:9000/dq/api/v1/health
+```
+
+ブラウザで `https://<VMのプライベートIP>:9000` にアクセスし、DQ Web のログイン画面が表示されることを確認する。
+
+### 10.3 Metastore への疎通再確認
+
+```bash
+# Private Endpoint 経由での接続確認
+nc -zv "${METASTORE_HOST}" "${METASTORE_PORT}"
+# 期待値: succeeded!
+
+# DNS 解決確認（Private Endpoint の場合、プライベート IP に解決されること）
+nslookup "${METASTORE_HOST}"
+# 期待値: プライベート IP アドレス（10.x.x.x 等）が返ること
+```
+
+### 10.4 グループ会社 DQ Web への接続確認（Agent Only 構成時）
+
+Agent Only 構成では、VM 上の DQ Agent がグループ会社の DQ Web のメタストアをポーリングする。
+
+```bash
+# グループ会社 DQ Web へのネットワーク疎通確認
+nc -zv "${DQ_WEB_HOST}" "${DQ_WEB_PORT}"
+
+# HTTPS でのヘルスチェック
+curl -sk "https://${DQ_WEB_HOST}:${DQ_WEB_PORT}/dq/api/v1/health"
+# 期待値: 200 OK
+```
+
+### 10.5 Azure Internal Load Balancer の設定（冗長化オプション A のみ）
+
+Active-Standby 2台構成を採用する場合のみ実施する。
+
+```bash
+# Internal Load Balancer の作成
+az network lb create \
+  --resource-group "${RG_NAME}" \
+  --name "lb-collibra-dq" \
+  --sku Standard \
+  --vnet-name "${VNET_NAME}" \
+  --subnet "${SUBNET_NAME}" \
+  --frontend-ip-name "fe-collibra-dq" \
+  --backend-pool-name "be-collibra-dq"
+
+# ヘルスプローブの作成（TCP 9000 で死活監視）
+az network lb probe create \
+  --resource-group "${RG_NAME}" \
+  --lb-name "lb-collibra-dq" \
+  --name "probe-dq-web" \
+  --protocol Tcp \
+  --port "${DQ_WEB_PORT}" \
+  --interval 15 \
+  --threshold 2
+
+# 負荷分散ルールの作成
+az network lb rule create \
+  --resource-group "${RG_NAME}" \
+  --lb-name "lb-collibra-dq" \
+  --name "rule-dq-web" \
+  --protocol Tcp \
+  --frontend-port "${DQ_WEB_PORT}" \
+  --backend-port "${DQ_WEB_PORT}" \
+  --frontend-ip-name "fe-collibra-dq" \
+  --backend-pool-name "be-collibra-dq" \
+  --probe-name "probe-dq-web"
+
+# 両 VM の NIC をバックエンドプールに追加
+for VM in "vm-collibra-dq-1" "vm-collibra-dq-2"; do
+  NIC_ID=$(az vm show \
+    --resource-group "${RG_NAME}" \
+    --name "${VM}" \
+    --query "networkProfile.networkInterfaces[0].id" \
+    --output tsv)
+
+  az network nic ip-config update \
+    --resource-group "${RG_NAME}" \
+    --nic-name "$(basename ${NIC_ID})" \
+    --name ipconfig1 \
+    --lb-name "lb-collibra-dq" \
+    --lb-address-pools "be-collibra-dq"
+done
+
+# ILB のフロントエンド IP 確認
+az network lb frontend-ip show \
+  --resource-group "${RG_NAME}" \
+  --lb-name "lb-collibra-dq" \
+  --name "fe-collibra-dq" \
+  --query privateIpAddress \
+  --output tsv
+```
+
+> 社内端末からは ILB のフロントエンド IP（プライベート IP）を使って DQ Web にアクセスする。
+
+---
+
+## 11. DQ Agent の設定
+
+DQ Agent は PostgreSQL メタストアをポーリングしてジョブを取得・実行するコンポーネント。Agent が DQ Web に認識されるよう Admin Console から登録を行う。
+
+### 11.1 Agent の接続先確認（Agent Only 構成）
+
+Agent Only 構成では、`owl.properties` の `spring.agent.datasource` がグループ会社のメタストアを指していることを確認する。
+
+```bash
+grep "spring.agent.datasource" "${OWL_BASE}/config/owl.properties"
+# 期待値: グループ会社の METASTORE_HOST が設定されていること
+```
+
+### 11.2 Admin Console での Agent 登録
+
+DQ Web UI（グループ会社、またはフルインストール時は自社 VM）にブラウザでログインし、Agent を登録する。
+
+**操作手順:**
+
+1. DQ Web UI にログイン（管理者アカウント）
+2. 右上の歯車アイコン → **Settings** をクリック
+3. 左メニューから **Admin Console** → **Agent Configuration** を選択
+4. **Add Agent** をクリックし、以下を入力する
+
+| 設定項目 | 入力値 | 説明 |
+|---|---|---|
+| Agent Display Name | `agent-vm-collibra-dq` | 任意の表示名（VM 名を含めると識別しやすい） |
+| Base Path | `/opt/owl` | VM 上のインストールディレクトリ（`OWL_BASE` の値） |
+| Spark Deployment Mode | `Client` | スタンドアロン構成では `Client` を選択 |
+| Number of Executors | `4` | `agent.properties` の `numExecutors` と合わせる |
+| Executor Memory (GB) | `16` | `agent.properties` の `executorMemory` と合わせる |
+| Driver Memory (GB) | `4` | `agent.properties` の `driverMemory` と合わせる |
+| Executor Cores | `4` | `agent.properties` の `executorCores` と合わせる |
+
+5. **Save** をクリック
+6. Agent Status が **Online** になることを確認する（数十秒〜1分程度かかる）
+
+### 11.3 Datasource の割り当て
+
+Agent に Datasource（接続先データベース）を割り当てる。
+
+**操作手順（Admin Console 画面から）:**
+
+1. **Admin Console** → **Agent Configuration** で登録済み Agent を選択
+2. 左パネル（未割り当ての Datasource 一覧）から使用する Datasource を選択
+3. 中央の **→** ボタンをクリックして右パネル（割り当て済み）に移動
+4. **Save** をクリック
+
+### 11.4 Agent Online 確認
+
+```bash
+# DQ REST API で Agent の状態を確認
+# フルインストール時（自社 VM の DQ Web）
+curl -sk -u admin:<パスワード> \
+  "https://localhost:${DQ_WEB_PORT}/dq/api/v1/agents" \
+  | python3 -m json.tool | grep -E "name|status"
+
+# Agent Only 構成時（グループ会社の DQ Web）
+curl -sk -u admin:<パスワード> \
+  "https://${DQ_WEB_HOST}:${DQ_WEB_PORT}/dq/api/v1/agents" \
+  | python3 -m json.tool | grep -E "name|status"
+```
+
+**期待される出力（Agent が Online の場合）:**
+
+```json
+"name": "agent-vm-collibra-dq",
+"status": "ONLINE"
+```
