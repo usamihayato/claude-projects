@@ -114,59 +114,352 @@
 
 ### 2.1 変数定義
 
-本手順全体で使用する環境変数を定義する。AKS 版と共通の変数に加え、ARO 固有の変数（ARO クラスター名・OpenShift コンソール URL 等）を追加する。
+本手順全体で使用する環境変数を定義する。AKS 版と共通の変数に加え、ARO 固有の変数を追加する。
+
+```bash
+# ---- Azure 基本情報 ----
+SUBSCRIPTION_ID="<サブスクリプションID>"
+LOCATION="japaneast"
+RG_NAME="rg-collibra-aro"
+
+# ---- ARO クラスター ----
+ARO_NAME="aro-collibra-dq"
+ARO_CONSOLE_URL=$(az aro show \
+  --resource-group "${RG_NAME}" \
+  --name "${ARO_NAME}" \
+  --query consoleProfile.url -o tsv)
+ARO_API_URL=$(az aro show \
+  --resource-group "${RG_NAME}" \
+  --name "${ARO_NAME}" \
+  --query apiserverProfile.url -o tsv)
+
+# ---- ACR（イメージレジストリ） ----
+ACR_NAME="acrcollibradq"
+ACR_LOGIN_SERVER="${ACR_NAME}.azurecr.io"
+
+# ---- Collibra DQ アプリケーション ----
+OC_PROJECT="collibra-dq"           # OpenShift Project 名
+NAMESPACE="${OC_PROJECT}"           # Helm / oc コマンドで共用
+DQ_VERSION="2026.02"
+SPARK_VERSION="4.1.0"
+HELM_RELEASE_NAME="collibra-dq"
+
+# ---- Collibra イメージレジストリ（Collibra 社提供） ----
+COLLIBRA_REGISTRY="<Collibraから提供されたレジストリURL>"
+COLLIBRA_REGISTRY_USER="<提供されたユーザー名>"
+COLLIBRA_REGISTRY_PASS="<提供されたパスワード>"
+
+# ---- ライセンス情報（Collibra 社提供） ----
+DQ_LICENSE_KEY="<ライセンスキー>"
+DQ_LICENSE_NAME="<ライセンス名>"
+
+# ---- メタストア（Azure DB for PostgreSQL） ----
+METASTORE_HOST="<PostgreSQL のホスト名>.postgres.database.azure.com"
+METASTORE_PORT="5432"
+METASTORE_DB="owlmetastore"
+METASTORE_USER="<DBユーザー名>"
+METASTORE_PASS="<DBパスワード>"
+
+# ---- DQ 管理者アカウント ----
+DQ_ADMIN_EMAIL="<管理者メールアドレス>"
+DQ_ADMIN_PASS="<管理者パスワード>"
+
+# ---- Helm チャートパス ----
+CHART_PATH="/home/${USER}/collibra-dq-chart"
+```
 
 ### 2.2 ARO クラスターへの接続確認
 
-`oc login` コマンドで ARO クラスターに接続し、ノードおよびクラスターバージョンを確認する。
+ARO の管理者認証情報を取得して `oc login` でクラスターに接続する。
+
+```bash
+# ARO の kubeadmin パスワードを取得
+ARO_PASSWORD=$(az aro list-credentials \
+  --resource-group "${RG_NAME}" \
+  --name "${ARO_NAME}" \
+  --query kubeadminPassword -o tsv)
+
+# oc login で接続
+oc login "${ARO_API_URL}" \
+  --username kubeadmin \
+  --password "${ARO_PASSWORD}" \
+  --insecure-skip-tls-verify=false
+
+# 接続確認
+oc whoami
+oc cluster-info
+```
+
+**期待される出力例:**
+```
+kubeadmin
+Kubernetes control plane is running at https://api.aro-collibra-dq.xxxx.japaneast.aroapp.io:6443
+```
+
+```bash
+# ノード一覧と状態確認（全ノードが Ready であること）
+oc get nodes -o wide
+```
+
+**期待される出力例:**
+```
+NAME                  STATUS   ROLES                  AGE   VERSION
+master-0              Ready    control-plane,master   1d    v1.29.x
+master-1              Ready    control-plane,master   1d    v1.29.x
+master-2              Ready    control-plane,master   1d    v1.29.x
+worker-japaneast-0    Ready    worker                 1d    v1.29.x
+worker-japaneast-1    Ready    worker                 1d    v1.29.x
+worker-japaneast-2    Ready    worker                 1d    v1.29.x
+```
 
 ### 2.3 必要ツールの確認（oc / kubectl / helm / az CLI）
 
-`oc` CLI・`helm`・`az` CLI のバージョンと動作を確認する。`oc` は OpenShift 固有の操作（SCC 設定・Route 作成等）に使用する。
+```bash
+# oc CLI バージョン確認
+oc version
+# 期待値: Client Version: 4.x.x / Server Version: 4.x.x
+
+# Helm バージョン確認（v3 系であること）
+helm version
+
+# az CLI バージョン確認
+az version
+```
+
+**oc CLI が未インストールの場合:**
+
+```bash
+# OpenShift コンソールのダウンロードページから取得
+# https://<ARO_CONSOLE_URL>/command-line-tools
+
+# または ARO の API サーバーからダウンロード
+curl -sL "${ARO_API_URL}/api/v1/namespaces/openshift/configmaps/console-public" \
+  | grep consoleURL
+
+# Linux 向け（例）
+wget https://mirror.openshift.com/pub/openshift-v4/clients/ocp/latest/openshift-client-linux.tar.gz
+tar -xvf openshift-client-linux.tar.gz
+sudo mv oc kubectl /usr/local/bin/
+oc version
+```
 
 ### 2.4 OpenShift プロジェクト作成
 
-AKS の Namespace に相当する OpenShift **Project** を作成し、以降の操作対象とする。
+AKS の Namespace に相当する OpenShift **Project** を作成する。Project は Namespace の上位概念で、RBAC・ネットワークポリシー・リソースクォータを一括管理できる。
+
+```bash
+# Project 作成
+oc new-project "${OC_PROJECT}" \
+  --description="Collibra DQ deployment project" \
+  --display-name="Collibra DQ"
+
+# 作成確認
+oc get project "${OC_PROJECT}"
+oc project "${OC_PROJECT}"   # 作業 Project を切り替え
+```
+
+**期待される出力例:**
+```
+NAME          DISPLAY NAME   STATUS
+collibra-dq   Collibra DQ    Active
+Now using project "collibra-dq" on server "https://api.aro-...".
+```
+
+```bash
+# Project にラベルを付与（リソース識別用）
+oc label namespace "${OC_PROJECT}" \
+  app.kubernetes.io/name=collibra-dq \
+  environment=production
+```
 
 ---
 
 ## 3. コンテナイメージの準備とレジストリ転送
 
-> **AKS 版との違い**: ACR への転送手順は AKS 版と同一。ARO では ACR に加えて **OpenShift 内部レジストリ**（`image-registry.openshift-image-registry.svc`）への転送も選択できる。
+> **AKS 版との違い**: Collibra GCR からのイメージ取得手順は同一。転送先として **ACR**（AKS 版と同様）と **OpenShift 内部レジストリ**の2択がある。プライベートクラスター環境では ACR を推奨する。
+
+**レジストリ選択指針:**
+
+| レジストリ | メリット | デメリット | 推奨場面 |
+|---|---|---|---|
+| ACR | AKS/ARO 共通で管理可・Private Endpoint 対応 | 別途コスト発生 | **本手順で採用（推奨）** |
+| OpenShift 内部レジストリ | ARO 標準・追加コストなし | ARO 専用・外部共有不可 | ARO 単独運用時 |
 
 ### 3.1 Collibra ライセンス情報の確認
 
-Collibra 社から受領するライセンスメールに記載されたイメージレジストリ URL・認証情報を確認する。
+Collibra 社から受領するライセンスメールに記載されたイメージレジストリ URL・認証情報を確認する（AKS 版 3.1 節と同一）。
 
 ### 3.2 Collibra レジストリからのイメージ取得
 
-提供された認証情報を使用し、DQ Web・Agent・Spark の各コンテナイメージを取得する。
+```bash
+# Collibra レジストリにログイン
+docker login "${COLLIBRA_REGISTRY}" \
+  --username "${COLLIBRA_REGISTRY_USER}" \
+  --password "${COLLIBRA_REGISTRY_PASS}"
 
-### 3.3 ACR または OpenShift 内部レジストリへの転送
+# DQ Web / Agent / Spark イメージを取得
+docker pull "${COLLIBRA_REGISTRY}/owl-web:${DQ_VERSION}"
+docker pull "${COLLIBRA_REGISTRY}/owl-agent:${DQ_VERSION}"
+docker pull "${COLLIBRA_REGISTRY}/owl-spark:${SPARK_VERSION}"
 
-取得したイメージを ACR または OpenShift 内部レジストリにプッシュし、ARO からの参照先を統一する。
+# 取得確認
+docker images | grep -E "owl-web|owl-agent|owl-spark"
+```
+
+### 3.3 ACR へのイメージ転送
+
+```bash
+# ACR にログイン
+az acr login --name "${ACR_NAME}"
+
+# DQ Web
+docker tag "${COLLIBRA_REGISTRY}/owl-web:${DQ_VERSION}" \
+           "${ACR_LOGIN_SERVER}/collibra/owl-web:${DQ_VERSION}"
+docker push "${ACR_LOGIN_SERVER}/collibra/owl-web:${DQ_VERSION}"
+
+# DQ Agent
+docker tag "${COLLIBRA_REGISTRY}/owl-agent:${DQ_VERSION}" \
+           "${ACR_LOGIN_SERVER}/collibra/owl-agent:${DQ_VERSION}"
+docker push "${ACR_LOGIN_SERVER}/collibra/owl-agent:${DQ_VERSION}"
+
+# Spark
+docker tag "${COLLIBRA_REGISTRY}/owl-spark:${SPARK_VERSION}" \
+           "${ACR_LOGIN_SERVER}/collibra/owl-spark:${SPARK_VERSION}"
+docker push "${ACR_LOGIN_SERVER}/collibra/owl-spark:${SPARK_VERSION}"
+
+# 登録確認
+az acr repository list --name "${ACR_NAME}" --output table
+```
+
+#### 補足: OpenShift 内部レジストリへの転送（ACR 非使用時）
+
+```bash
+# 内部レジストリの Route を有効化（管理者権限が必要）
+oc patch configs.imageregistry.operator.openshift.io/cluster \
+  --type merge \
+  --patch '{"spec":{"defaultRoute":true}}'
+
+# 内部レジストリの外部 URL を取得
+INTERNAL_REGISTRY=$(oc get route default-route \
+  -n openshift-image-registry \
+  -o jsonpath='{.spec.host}')
+
+# OpenShift トークンで docker login
+docker login "${INTERNAL_REGISTRY}" \
+  --username kubeadmin \
+  --password "$(oc whoami -t)"
+
+# イメージをタグ付けしてプッシュ
+docker tag "${COLLIBRA_REGISTRY}/owl-web:${DQ_VERSION}" \
+  "${INTERNAL_REGISTRY}/${OC_PROJECT}/owl-web:${DQ_VERSION}"
+docker push "${INTERNAL_REGISTRY}/${OC_PROJECT}/owl-web:${DQ_VERSION}"
+# Agent / Spark も同様に実施
+```
 
 ### 3.4 イメージプルシークレットの設定
 
-ACR を使用する場合はプルシークレット（`dq-pull-secret`）をプロジェクトに作成する。OpenShift 内部レジストリを使用する場合は ServiceAccount の `imagePullSecrets` に内部レジストリ用トークンを追加する。
+#### ACR 使用時
+
+```bash
+ACR_PASSWORD=$(az acr credential show \
+  --name "${ACR_NAME}" \
+  --query "passwords[0].value" -o tsv)
+
+oc create secret docker-registry dq-pull-secret \
+  --docker-server="${ACR_LOGIN_SERVER}" \
+  --docker-username="${ACR_NAME}" \
+  --docker-password="${ACR_PASSWORD}" \
+  -n "${OC_PROJECT}"
+
+# デフォルト ServiceAccount に紐付け（Pod が自動使用）
+oc secrets link default dq-pull-secret --for=pull -n "${OC_PROJECT}"
+
+# 確認
+oc get secret dq-pull-secret -n "${OC_PROJECT}"
+```
+
+#### OpenShift 内部レジストリ使用時
+
+```bash
+# 内部レジストリは ServiceAccount のトークンで自動認証されるため
+# 追加のプルシークレット設定は不要
+# ImageStream を使用してイメージを管理する
+oc import-image collibra/owl-web:${DQ_VERSION} \
+  --from="${INTERNAL_REGISTRY}/${OC_PROJECT}/owl-web:${DQ_VERSION}" \
+  --confirm -n "${OC_PROJECT}"
+```
 
 ---
 
 ## 4. Helm チャートの準備
 
-> **AKS 版との違い**: Helm チャートの入手・展開手順は同一。ARO では OpenShift の SCC 制約を考慮した values.yaml の追加設定が必要になる場合がある。
+> **AKS 版との違い**: チャートの入手・展開手順は同一。ARO では OpenShift の SCC 制約により、コンテナの `runAsUser` を固定できないケースがある。ARO が自動割り当てする UID 範囲を許容するよう `securityContext` を調整する必要がある。
 
 ### 4.1 Helm チャートの入手方法
 
-ライセンスメールに記載のダウンロードリンクから ZIP ファイルを取得し、管理端末に展開する。
+```bash
+# ライセンスメール記載の URL からダウンロード
+wget -O collibra-dq-chart.zip "<ライセンスメール記載のダウンロードURL>"
+
+mkdir -p "${CHART_PATH}"
+unzip collibra-dq-chart.zip -d "${CHART_PATH}"
+
+ls -l "${CHART_PATH}"
+```
 
 ### 4.2 チャートディレクトリ構造の確認
 
-展開後のディレクトリ構造と主要ファイル（`Chart.yaml`・`values.yaml`・`templates/`）を確認する。
+```bash
+find "${CHART_PATH}" -maxdepth 3 | sort
+```
+
+**典型的なチャート構造:**
+
+```
+collibra-dq-chart/
+├── Chart.yaml
+├── values.yaml
+├── templates/
+│   ├── deployment-web.yaml
+│   ├── deployment-agent.yaml
+│   ├── service-web.yaml
+│   ├── pvc-web.yaml
+│   ├── rbac.yaml
+│   └── ...
+└── charts/
+```
+
+```bash
+# チャートバージョン確認
+cat "${CHART_PATH}/Chart.yaml"
+```
 
 ### 4.3 values.yaml 設定パラメータ一覧
 
-ARO 環境固有のパラメータ（`securityContext`・`runAsUser`・`fsGroup` 等）を含む設定項目を一覧化する。
+AKS 版と共通のパラメータに加え、ARO 固有の設定を示す。
+
+#### 共通パラメータ（AKS 版と同一）
+
+| パラメータ | 説明 | 設定例 |
+|---|---|---|
+| `global.version.dq` | Collibra DQ バージョン | `"2026.02"` |
+| `global.version.spark` | Spark バージョン | `"4.1.0"` |
+| `global.image.repo` | コンテナイメージリポジトリ | `"acrcollibradq.azurecr.io/collibra"` |
+| `global.configMap.data.license_key` | ライセンスキー | `"<license_key>"` |
+| `global.web.service.type` | サービスタイプ | `"ClusterIP"`（Route で公開） |
+| `global.persistence.web.storageClassName` | DQ Web 用 StorageClass | `"azurefile-csi"` |
+
+#### ARO 固有パラメータ
+
+| パラメータ | 説明 | ARO での推奨値 |
+|---|---|---|
+| `global.web.securityContext.runAsNonRoot` | root 以外で実行 | `true` |
+| `global.web.securityContext.runAsUser` | 実行 UID（SCC anyuid 使用時のみ指定） | 省略（ARO が自動割り当て）|
+| `global.web.podSecurityContext.fsGroup` | ボリュームマウント用 GID | 省略（ARO が自動割り当て） |
+| `global.web.securityContext.allowPrivilegeEscalation` | 権限昇格の禁止 | `false` |
+| `global.web.securityContext.capabilities.drop` | Linux Capabilities の削除 | `["ALL"]` |
+
+> **補足**: ARO の `restricted-v2` SCC（デフォルト）では UID が自動割り当てされるため、`runAsUser` を固定指定するとデプロイが拒否される。Collibra DQ が特定 UID を必要とする場合は 6章で `anyuid` SCC を付与する。
 
 ---
 
