@@ -32,28 +32,71 @@
 
 本ドキュメントは、Azure Kubernetes Service (AKS) 上に Collibra DQ (Data Quality) をデプロイするための詳細なセットアップ手順を記載する。
 
-対象範囲はアプリケーション層のセットアップに限定し、Azure インフラ（AKS クラスター、VNET、ACR 等）の構築手順は含まない。
+**対象読者**: AKS の基本操作（kubectl / helm）を理解しているインフラエンジニア・システムエンジニア
 
-### 1.2 前提条件（AKS 基盤構築済み前提）
+**対象範囲**:
 
-本手順を実施する前に、以下が完了していること：
+| スコープ | 本ドキュメントの扱い |
+|---|---|
+| AKS クラスター構築（VNET / ACR / ノードプール等） | 対象外（`aks-build.md` 参照） |
+| Collibra DQ アプリケーションのデプロイ・設定 | **対象** |
+| DQ Agent の接続・Spark 設定 | **対象** |
+| Collibra DQ の日常運用・監視 | 一部対象（動作確認・アップグレードのみ） |
 
-- AKS クラスターの構築完了（`aks-build.md` 参照）
-- Azure Container Registry (ACR) の構築と AKS への接続完了
-- 管理用 Linux VM へのアクセス確認（kubectl / helm インストール済み）
-- 外部メタストア用 Azure Database for PostgreSQL の準備
-- Collibra 社からのライセンスキーおよびコンテナイメージアクセス情報の取得
+**デプロイ対象コンポーネント**:
+
+| コンポーネント | 役割 |
+|---|---|
+| DQ Web | Web UI / REST API サーバー（ポート 9000） |
+| DQ Agent | Spark ジョブ実行エンジン（ポート 9101） |
+| Spark | データ品質チェック処理基盤（Executor Pod として動的生成） |
+
+### 1.2 前提条件
+
+本手順を実施する前に、以下がすべて完了していることを確認すること。
+
+#### インフラ層（`aks-build.md` で構築済み）
+
+| 項目 | 確認方法 |
+|---|---|
+| AKS クラスター（`aks-collibra-dq`）が Running 状態 | `az aks show -g rg-collibra-dq -n aks-collibra-dq --query provisioningState` |
+| DQ 用ノードプール（`dqpool`）が Ready | `kubectl get nodes -l agentpool=dqpool` |
+| ACR（`acrcollibradq`）が AKS にアタッチ済み | `az aks show -g rg-collibra-dq -n aks-collibra-dq --query addonProfiles` |
+| 管理用 Linux VM（`vm-aks-mgmt`）に SSH 接続可能 | SSH 接続確認 |
+| kubectl・helm が管理 VM にインストール済み | `kubectl version --client` / `helm version` |
+| Azure Database for PostgreSQL（外部メタストア）が起動済み | Azure Portal または az コマンドで確認 |
+| Private Endpoint 経由で metastore に疎通可能 | `nc -zv <host> 5432` |
+
+#### ライセンス・認証情報（Collibra 社から取得済み）
+
+| 項目 | 取得先 |
+|---|---|
+| ライセンスキー（`license_key`） | Collibra ライセンスメール |
+| ライセンス名（`license_name`） | Collibra ライセンスメール |
+| コンテナイメージ取得用認証情報（ユーザー名・パスワード） | Collibra ライセンスメール |
+| Helm チャート ZIP ファイルのダウンロード URL | Collibra ライセンスメール |
+
+#### バージョン要件
+
+| ソフトウェア | 要件 | 本環境の値 |
+|---|---|---|
+| Collibra DQ | 2026.02 | 2026.02 |
+| Spark | 4.1.0（DQ 2026.02 必須） | 4.1.0 |
+| Java | 17（DQ 2026.02 必須） | 17（コンテナ内蔵） |
+| Kubernetes | 1.29〜1.34 | 1.32 |
+| Helm | v3 以上 | v3.x |
+| PostgreSQL | 13 以上 | Azure DB for PostgreSQL Flexible Server |
 
 ### 1.3 関連ドキュメント一覧
 
-| ドキュメント | 内容 |
-|---|---|
-| `docs/collibra/report.md` | Collibra DQ 製品概要・システム要件 |
-| `docs/collibra/deployment-comparison.md` | デプロイ構成比較（AKS 推奨の根拠） |
-| `docs/collibra/setup.md` | スタンドアロン・Kubernetes インストール概要 |
-| `docs/kubernetes/aks-design.md` | AKS 設計書（Hub-Spoke 構成） |
-| `docs/kubernetes/aks-build.md` | AKS 基盤構築手順（インフラ層） |
-| `docs/kubernetes/helm.md` | Helm 基礎知識 |
+| ドキュメント | 内容 | 参照タイミング |
+|---|---|---|
+| `docs/collibra/report.md` | Collibra DQ 製品概要・システム要件 | 製品仕様確認時 |
+| `docs/collibra/deployment-comparison.md` | デプロイ構成比較（AKS 推奨の根拠） | 構成検討時 |
+| `docs/collibra/setup.md` | スタンドアロン・Kubernetes インストール概要 | 構成概要の確認時 |
+| `docs/kubernetes/aks-design.md` | AKS 設計書（Hub-Spoke 構成） | インフラ設計確認時 |
+| `docs/kubernetes/aks-build.md` | AKS 基盤構築手順（インフラ層） | **本手順の前提作業** |
+| `docs/kubernetes/helm.md` | Helm 基礎知識 | Helm 操作の参考 |
 
 ---
 
