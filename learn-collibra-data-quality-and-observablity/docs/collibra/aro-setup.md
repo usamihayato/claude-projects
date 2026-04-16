@@ -1311,81 +1311,594 @@ echo "DQ Web URL: ${DQ_URL}"
 
 ## 11. DQ Agent の設定
 
-> **AKS 版との違い**: Agent の設定内容は同一。ARO では Spark Executor Pod 生成時にも SCC が適用されるため、ServiceAccount に適切な SCC を付与する必要がある。
+> **AKS 版との違い**: Agent の設定内容は基本的に同一。ARO では Spark Executor Pod の動的生成時にも SCC が適用されるため、`dq-agent-sa` に `anyuid` SCC を付与することが必須となる。
+
+**DQ Agent の役割（ARO）:**
+
+```
+DQ Web UI
+   │ REST API (ポート 9000)
+   ▼
+DQ Agent (ポート 9101)
+   │ Kubernetes API（OpenShift API Server 経由）
+   ▼
+Spark Driver Pod（動的生成）
+   │
+   ├── Spark Executor Pod 1
+   ├── Spark Executor Pod 2
+   └── Spark Executor Pod N
+```
 
 ### 11.1 RBAC / ServiceAccount 設定（SCC 付与含む）
 
-DQ Agent・Spark Driver 用 ServiceAccount を作成し、Pod 操作権限（Role / RoleBinding）と SCC（`anyuid` または カスタム）を付与する。
+DQ Agent と Spark Driver が Pod の作成・削除を行うための権限と、ARO の SCC を付与する。
+
+```bash
+cat <<EOF | oc apply -f - -n "${OC_PROJECT}"
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: dq-agent-sa
+  namespace: ${OC_PROJECT}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: dq-agent-role
+  namespace: ${OC_PROJECT}
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "services", "configmaps", "secrets"]
+    verbs: ["get", "list", "create", "delete", "watch"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: dq-agent-rolebinding
+  namespace: ${OC_PROJECT}
+subjects:
+  - kind: ServiceAccount
+    name: dq-agent-sa
+    namespace: ${OC_PROJECT}
+roleRef:
+  kind: Role
+  apiGroup: rbac.authorization.k8s.io
+  name: dq-agent-role
+EOF
+```
+
+ARO では ServiceAccount に SCC を付与しないと Spark Executor Pod の起動時に SCC 違反エラーが発生する。`cluster-admin` 権限で以下を実行する。
+
+```bash
+# dq-agent-sa に anyuid SCC を付与
+oc adm policy add-scc-to-user anyuid \
+  -z dq-agent-sa \
+  -n "${OC_PROJECT}"
+
+# 付与された SCC を確認
+oc adm policy who-can use scc/anyuid | grep dq-agent-sa
+```
+
+> **補足**: Spark Executor Pod は `dq-agent-sa` を継承して動作するため、この ServiceAccount に anyuid を付与するだけで Executor Pod にも SCC が適用される。
+
+RBAC の確認:
+
+```bash
+oc get role,rolebinding,serviceaccount -n "${OC_PROJECT}"
+```
 
 ### 11.2 Agent 接続先の設定
 
-DQ Agent が接続する DQ Web のエンドポイントを Helm values に設定する。
+DQ Agent が DQ Web に接続するためのエンドポイントを `custom-values-aro.yaml` に設定する。
+
+```yaml
+# DQ Agent の設定（custom-values-aro.yaml に追記）
+agent:
+  serviceAccount:
+    name: dq-agent-sa       # 11.1 で作成した ServiceAccount
+  config:
+    owlweb:
+      host: "collibra-dq-web.${OC_PROJECT}.svc.cluster.local"
+      port: "9000"
+      protocol: "https"     # TLS 有効時は https
+    # Agent の待ち受けポート
+    port: "9101"
+```
+
+設定変更を Helm で反映する。
+
+```bash
+helm upgrade "${HELM_RELEASE_NAME}" "${CHART_PATH}" \
+  --namespace "${OC_PROJECT}" \
+  --values ~/custom-values-aro.yaml \
+  --reuse-values \
+  --wait
+```
+
+Agent Pod の起動確認:
+
+```bash
+oc get pods -n "${OC_PROJECT}" -l app=owl-agent
+oc logs -n "${OC_PROJECT}" -l app=owl-agent --tail=50
+```
+
+**Agent 正常接続時のログキーワード:**
+
+```
+Connected to DQ Web at https://collibra-dq-web:9000
+Agent is running on port 9101
+```
 
 ### 11.3 Spark Executor 設定
 
-Spark Driver・Executor の Pod リソースと ARO ノードへの配置設定を行う。
+Spark Driver・Executor の Pod リソースとイメージを設定する。ARO では `nodeSelector` に OpenShift のワーカーノードラベルを指定する。
+
+```yaml
+# Spark の設定（custom-values-aro.yaml に追記）
+spark:
+  image: "${ACR_LOGIN_SERVER}/collibra/owl-spark:${SPARK_VERSION}"
+
+  # Spark Driver の設定
+  driver:
+    cores: 1
+    memory: "2g"
+    serviceAccount: dq-agent-sa
+    # ARO の SCC を継承するため ServiceAccount の指定が重要
+    securityContext:
+      runAsNonRoot: true
+
+  # Spark Executor の設定
+  executor:
+    cores: 2
+    memory: "4g"
+    instances: 2
+    securityContext:
+      runAsNonRoot: true
+
+  # Spark Scratch Disk（5章で作成した PVC を参照）
+  scratchDisk:
+    type: persistentVolumeClaim
+    claimName: spark-scratch-pvc
+
+  # Spark が動作する Project（Namespace）
+  namespace: "${OC_PROJECT}"
+
+  # ARO ワーカーノードへの配置
+  nodeSelector:
+    node-role.kubernetes.io/worker: ""
+```
+
+ジョブ実行中に Executor Pod が正常に起動することを確認する（12章の動作確認で検証）。
+
+```bash
+# ジョブ実行中に Executor Pod を確認するコマンド
+oc get pods -n "${OC_PROJECT}" | grep spark
+```
 
 ---
 
 ## 12. 動作確認
 
-> **AKS 版との違い**: 確認コマンドは `kubectl` の代わりに `oc` を使用する。OpenShift 組み込みの Web コンソール（管理 UI）からも Pod・ログ・メトリクスを確認できる。
+> **AKS 版との違い**: 確認コマンドは `kubectl` の代わりに `oc` を使用する。`Ingress` の代わりに `Route` を確認する。メトリクスは Container Insights の代わりに OpenShift 組み込み監視（Prometheus / Grafana）を使用する。
 
 ### 12.1 Pod / Service / PVC の状態確認
 
-`oc get pod,svc,pvc,route` で全コンポーネントのリソース状態を一括確認する。
+全コンポーネントのリソースが正常状態であることを一括確認する。
+
+```bash
+# Pod・Service・PVC・Route を一括確認
+oc get pod,svc,pvc,route -n "${OC_PROJECT}"
+```
+
+**正常時の期待状態:**
+
+| リソース | 種別 | 期待状態 |
+|---|---|---|
+| `collibra-dq-web-xxx` | Pod | Running 1/1 |
+| `collibra-dq-agent-xxx` | Pod | Running 1/1 |
+| `collibra-dq-web` | Service | ClusterIP |
+| `dq-web-pvc` | PVC | Bound |
+| `spark-scratch-pvc` | PVC | Bound |
+| `dq-jdbc-drivers-pvc` | PVC | Bound |
+| `dq-web-route` | Route | Accepted（HOST/PORT に FQDN が表示） |
+
+Pod が正常に起動しない場合はイベントを確認する。
+
+```bash
+oc get events -n "${OC_PROJECT}" \
+  --sort-by='.lastTimestamp' | tail -20
+```
+
+OpenShift Web コンソールでの確認（ブラウザ）:
+
+```bash
+# コンソール URL を取得
+oc whoami --show-console
+# 例: https://console-openshift-console.apps.<cluster-domain>
+```
+
+Web コンソールにログイン後、**Workloads > Pods** から Project `collibra-dq` を選択して Pod 一覧と状態を確認できる。
 
 ### 12.2 DQ Web UI へのアクセス確認
 
-Route の URL でブラウザからアクセスし、管理者アカウントでのログインを確認する。
+Route の URL でブラウザからアクセスし、ログイン画面が表示されることを確認する。
+
+```bash
+# Route の URL を取得
+DQ_URL="https://$(oc get route dq-web-route -n ${OC_PROJECT} -o jsonpath='{.spec.host}')"
+echo "DQ Web URL: ${DQ_URL}"
+
+# HTTP ステータス確認
+curl -sk "${DQ_URL}" -o /dev/null -w "%{http_code}\n"
+# 期待値: 200
+```
+
+ブラウザで `${DQ_URL}` を開き、以下を確認する。
+
+1. Collibra DQ のログイン画面が表示される
+2. 管理者アカウント（`DQ_ADMIN_EMAIL` / `DQ_ADMIN_PASS`）でログインできる
+3. ダッシュボードが表示される
+
+> **補足**: Edge Termination を使用している場合、OpenShift Router が TLS を終端するため、ブラウザには Router の証明書（Let's Encrypt または自己署名）が提示される。自己署名証明書の場合はブラウザの警告をバイパスするか、信頼済み CA として登録する。
 
 ### 12.3 サンプルジョブの実行テスト
 
 DQ Web UI からデータソースを登録し、DQ ジョブを実行して Spark Executor Pod が正常に生成・完了することを確認する。
 
+**手順:**
+
+1. **データソース登録**
+   - 左メニューの **Explorer** を開く
+   - **Add Connection** でメタストア（PostgreSQL）の接続情報を入力
+   - **Test Connection** をクリックして接続成功を確認
+
+2. **DQ ジョブ実行**
+   - 登録したデータソースからテーブルを選択
+   - **Run** でプロファイリングジョブを実行
+   - ジョブステータスが **Success** になることを確認
+
+3. **Spark Executor Pod の確認**（ジョブ実行中に別ターミナルで）
+
+```bash
+# Executor Pod が生成されることを確認（ARO は oc コマンドを使用）
+oc get pods -n "${OC_PROJECT}" --watch | grep spark
+```
+
+**期待される出力（ジョブ実行中）:**
+
+```
+collibra-dq-spark-driver-xxx   1/1     Running   0   10s
+collibra-dq-spark-exec-1-xxx   1/1     Running   0   15s
+collibra-dq-spark-exec-2-xxx   1/1     Running   0   15s
+```
+
+ジョブ完了後、Executor Pod は自動的に削除される。
+
+> **ARO 固有チェック**: Executor Pod が `Pending` や `Error` になる場合は SCC 違反の可能性がある。13章のトラブルシューティングを参照。
+
 ### 12.4 ログ・メトリクスの確認
 
-`oc logs` によるログ確認と、OpenShift 組み込み監視（Prometheus / Grafana）でのメトリクス確認を行う。
+各コンポーネントのログにエラーがないことを確認する。
+
+```bash
+# DQ Web のログ確認（エラー抽出）
+oc logs -n "${OC_PROJECT}" \
+  -l app=owl-web --tail=200 \
+  | grep -iE "error|exception|warn" | grep -v "WARN.*hikari"
+
+# DQ Agent のログ確認
+oc logs -n "${OC_PROJECT}" \
+  -l app=owl-agent --tail=100 \
+  | grep -iE "error|exception"
+```
+
+**OpenShift 組み込み監視（Prometheus / Grafana）でのメトリクス確認:**
+
+ARO には OpenShift の標準監視スタック（Prometheus / Alertmanager / Grafana）が組み込まれている。Pod のリソース使用状況を確認するには Web コンソールを使用する。
+
+```bash
+# Prometheus / Grafana の URL を確認
+oc get route -n openshift-monitoring
+# prometheus-k8s, grafana, alertmanager-main の Route が表示される
+```
+
+Web コンソールでのメトリクス確認:
+
+1. **Observe > Metrics** を開く
+2. Project を `collibra-dq` に切り替える
+3. PromQL クエリ例:
+
+```promql
+# CPU 使用率（DQ Web Pod）
+rate(container_cpu_usage_seconds_total{namespace="collibra-dq", container="owl-web"}[5m])
+
+# メモリ使用量（DQ Agent Pod）
+container_memory_working_set_bytes{namespace="collibra-dq", container="owl-agent"}
+
+# Spark Executor Pod 数
+count(kube_pod_info{namespace="collibra-dq"}) by (pod)
+```
+
+Grafana でのダッシュボード確認（ARO クラスター管理者権限が必要）:
+
+```bash
+# Grafana の Route URL を取得
+oc get route grafana -n openshift-monitoring \
+  -o jsonpath='{.spec.host}'
+```
 
 ---
 
 ## 13. トラブルシューティング
 
-> **AKS 版との違い**: エラー種別と調査コマンドは基本的に同一（`kubectl` → `oc`）。ARO 固有のエラーとして **SCC 違反**（`Error creating: pods ... is forbidden: unable to validate against any security context constraint`）を追加する。
+> **AKS 版との違い**: エラー種別と調査コマンドは基本的に同一（`kubectl` → `oc`）。ARO 固有エラーとして **SCC 違反**・**内部レジストリ認証失敗**・**Route 証明書エラー** を追加している。
 
 ### 13.1 よくあるエラーと対処法
 
-AKS 版の項目に加え、ARO 固有エラー（SCC 違反・内部レジストリ認証失敗・Route 設定ミス等）と対処法を記載する。
+| 症状 | 主な原因 | 確認コマンド / 対処法 |
+|---|---|---|
+| Pod が `ImagePullBackOff` | ACR へのイメージ未転送、またはプルシークレット未設定 | `oc describe pod <pod> -n ${OC_PROJECT}` でイメージ名を確認。3章の ACR 転送・3.4 節のシークレット作成を再実施 |
+| Pod が `Pending` | ノードリソース不足、または PVC がバインドされていない | `oc describe pod <pod>` の Events 欄を確認。ワーカーノードのリソースまたは PVC の状態を確認 |
+| PVC が `Pending` のまま | StorageClass が存在しない、または NFS に対応していない | `oc describe pvc <pvc> -n ${OC_PROJECT}` を確認。5章の StorageClass 作成を再実施 |
+| Pod が `CrashLoopBackOff` | アプリ起動エラー（DB 接続失敗・ライセンスキー不正等） | `oc logs <pod> -n ${OC_PROJECT} --previous` でクラッシュ直前のログを確認 |
+| メタストア接続エラー | Private Endpoint の疎通不可、または DB 資格情報の誤り | 8.1 節の疎通確認を再実施。Secret の値が正しいかを確認 |
+| `OOMKilled` | Spark Executor のメモリ不足 | 11.3 節の `executor.memory` を増加。ワーカーノードの VM サイズを確認 |
+| **SCC 違反** `is forbidden: unable to validate against any security context constraint` | `dq-agent-sa` への SCC 付与漏れ | `oc adm policy add-scc-to-user anyuid -z dq-agent-sa -n ${OC_PROJECT}` を実行（11.1 節を参照） |
+| **SCC 違反（Spark Executor）** `pods "spark-exec-xxx" is forbidden` | Executor Pod 生成時の SCC 検証失敗 | `oc get events -n ${OC_PROJECT}` で `Forbidden` を確認。`dq-agent-sa` に anyuid が付与されているか `oc adm policy who-can use scc/anyuid` で確認 |
+| Route が `503 Service Unavailable` | DQ Web Pod が未起動、または Service 名・ポートの不一致 | `oc get svc -n ${OC_PROJECT}` で Service 名とポートを確認。Route の `spec.to.name` が Service 名と一致するか検証 |
+| Route の証明書エラー（ブラウザ） | 自己署名証明書または信頼されていない CA | Edge Termination の場合は OpenShift Router のワイルドカード証明書が使用される。`oc get route dq-web-route -n ${OC_PROJECT} -o yaml` で `tls.termination` を確認 |
+| **内部レジストリ認証失敗** `unauthorized: authentication required` | OpenShift 内部レジストリへのプッシュ権限不足 | `oc policy add-role-to-user registry-editor -z default -n ${OC_PROJECT}` を実行 |
+| Agent が DQ Web に接続できない | ホスト名解決失敗、または TLS 証明書エラー | Agent ログで接続エラーを確認。11.2 節の `owlweb.host` に ClusterDNS 名（`<svc>.<project>.svc.cluster.local`）を指定 |
+| Spark ジョブが `FAILED` | RBAC 不足で Executor Pod を作成できない | `oc get events -n ${OC_PROJECT}` で `Forbidden` エラーを確認。11.1 節の Role に `create pods` 権限を付与 |
 
 ### 13.2 デバッグコマンド集
 
-`oc describe`・`oc logs`・`oc exec`・`oc get events`・`oc adm policy` 等を用途別にまとめる。
+#### Pod の状態調査
+
+```bash
+# Pod 一覧と状態確認（ノード情報含む）
+oc get pods -n "${OC_PROJECT}" -o wide
+
+# Pod の詳細（イベント・マウント・コンテナ情報）
+oc describe pod <POD_NAME> -n "${OC_PROJECT}"
+
+# クラッシュ直前のログ（CrashLoopBackOff 時）
+oc logs <POD_NAME> -n "${OC_PROJECT}" --previous
+
+# リアルタイムログ追跡
+oc logs <POD_NAME> -n "${OC_PROJECT}" -f
+
+# ラベルで複数 Pod のログを集約
+oc logs -n "${OC_PROJECT}" -l app=owl-web --tail=100
+```
+
+#### Pod 内での調査
+
+```bash
+# Pod 内シェルに接続
+oc exec -it <POD_NAME> -n "${OC_PROJECT}" -- /bin/bash
+
+# Pod 内から PostgreSQL への疎通確認
+oc exec -it <POD_NAME> -n "${OC_PROJECT}" -- \
+  nc -zv "${METASTORE_HOST}" 5432
+
+# Pod 内の環境変数確認（ライセンスキー等）
+oc exec -it <POD_NAME> -n "${OC_PROJECT}" -- env | grep -iE "license|owl|db"
+```
+
+#### Project 全体の調査
+
+```bash
+# 直近のイベントを確認（エラー原因の特定に有効）
+oc get events -n "${OC_PROJECT}" \
+  --sort-by='.lastTimestamp' | tail -30
+
+# 全リソースの一覧確認
+oc get all -n "${OC_PROJECT}"
+
+# Secret の存在確認（値は表示しない）
+oc get secret -n "${OC_PROJECT}"
+oc describe secret <SECRET_NAME> -n "${OC_PROJECT}"
+
+# Route の詳細確認
+oc describe route dq-web-route -n "${OC_PROJECT}"
+```
+
+#### SCC 関連の調査（ARO 固有）
+
+```bash
+# dq-agent-sa に付与されている SCC を確認
+oc get scc -o json | jq '.items[].users[]' 2>/dev/null | grep "dq-agent-sa"
+
+# anyuid SCC の使用権限を確認
+oc adm policy who-can use scc/anyuid
+
+# SCC 違反の詳細確認（Kubernetes API 監査ログ）
+oc get events -n "${OC_PROJECT}" \
+  --field-selector reason=FailedCreate | grep -i "scc\|forbidden"
+
+# ServiceAccount に付与されている SCC を一覧表示
+oc adm policy scc-review \
+  -z dq-agent-sa \
+  -n "${OC_PROJECT}" \
+  --resource=pods \
+  --serviceaccount=dq-agent-sa
+```
+
+#### Helm の状態調査
+
+```bash
+# Helm リリースの状態確認
+helm status "${HELM_RELEASE_NAME}" -n "${OC_PROJECT}"
+
+# デプロイ済みの values を確認
+helm get values "${HELM_RELEASE_NAME}" -n "${OC_PROJECT}"
+
+# Helm が生成したマニフェストを確認
+helm get manifest "${HELM_RELEASE_NAME}" -n "${OC_PROJECT}"
+
+# Helm リリース履歴
+helm history "${HELM_RELEASE_NAME}" -n "${OC_PROJECT}"
+```
 
 ---
 
 ## 14. アップグレード手順
 
-> **AKS 版との違い**: イメージ転送先が ACR または OpenShift 内部レジストリになる点以外、手順は AKS 版と同一。
+> **AKS 版との違い**: イメージ転送先が ACR または OpenShift 内部レジストリになる点と、ローリングアップデートの確認コマンドが `oc rollout status` になる点以外、手順は AKS 版と同一。
 
 ### 14.1 アップグレード前の準備
 
-メタストアバックアップ・Helm values バックアップを取得する。
+```bash
+# 現在のバージョンを確認
+helm list -n "${OC_PROJECT}"
+oc get pods -n "${OC_PROJECT}" \
+  -o jsonpath='{.items[*].spec.containers[*].image}' | tr ' ' '\n'
+
+# メタストアのバックアップ（Azure DB for PostgreSQL）
+pg_dump \
+  "host=${METASTORE_HOST} port=${METASTORE_PORT} \
+   dbname=${METASTORE_DB} user=${METASTORE_USER} sslmode=require" \
+  -F c -f "owlmetastore_backup_$(date +%Y%m%d).dump"
+
+# Helm の現在の values をバックアップ
+helm get values "${HELM_RELEASE_NAME}" -n "${OC_PROJECT}" \
+  > ~/helm-values-backup-$(date +%Y%m%d).yaml
+```
 
 ### 14.2 新バージョンのイメージをレジストリに転送
 
-新バージョンのイメージを ACR または OpenShift 内部レジストリに転送する。
+**パターン A: ACR に転送する場合（推奨）**
+
+```bash
+# 新バージョンの変数を設定
+NEW_DQ_VERSION="<新バージョン例: 2026.05>"
+NEW_SPARK_VERSION="<対応 Spark バージョン>"
+
+# Collibra レジストリからイメージを取得
+docker login "${COLLIBRA_REGISTRY}" \
+  --username "${COLLIBRA_REGISTRY_USER}" \
+  --password "${COLLIBRA_REGISTRY_PASS}"
+
+docker pull "${COLLIBRA_REGISTRY}/owl-web:${NEW_DQ_VERSION}"
+docker pull "${COLLIBRA_REGISTRY}/owl-agent:${NEW_DQ_VERSION}"
+docker pull "${COLLIBRA_REGISTRY}/owl-spark:${NEW_SPARK_VERSION}"
+
+# ACR へ転送
+az acr login --name "${ACR_NAME}"
+
+for IMG in owl-web owl-agent; do
+  docker tag "${COLLIBRA_REGISTRY}/${IMG}:${NEW_DQ_VERSION}" \
+             "${ACR_LOGIN_SERVER}/collibra/${IMG}:${NEW_DQ_VERSION}"
+  docker push "${ACR_LOGIN_SERVER}/collibra/${IMG}:${NEW_DQ_VERSION}"
+done
+
+docker tag "${COLLIBRA_REGISTRY}/owl-spark:${NEW_SPARK_VERSION}" \
+           "${ACR_LOGIN_SERVER}/collibra/owl-spark:${NEW_SPARK_VERSION}"
+docker push "${ACR_LOGIN_SERVER}/collibra/owl-spark:${NEW_SPARK_VERSION}"
+```
+
+**パターン B: OpenShift 内部レジストリに転送する場合**
+
+```bash
+# 内部レジストリへのログイン
+INTERNAL_REGISTRY=$(oc get route default-route \
+  -n openshift-image-registry \
+  -o jsonpath='{.spec.host}')
+docker login "${INTERNAL_REGISTRY}" \
+  -u "$(oc whoami)" \
+  -p "$(oc whoami -t)"
+
+# Collibra レジストリから pull して内部レジストリへ push
+for IMG in owl-web owl-agent; do
+  docker pull "${COLLIBRA_REGISTRY}/${IMG}:${NEW_DQ_VERSION}"
+  docker tag  "${COLLIBRA_REGISTRY}/${IMG}:${NEW_DQ_VERSION}" \
+              "${INTERNAL_REGISTRY}/${OC_PROJECT}/${IMG}:${NEW_DQ_VERSION}"
+  docker push "${INTERNAL_REGISTRY}/${OC_PROJECT}/${IMG}:${NEW_DQ_VERSION}"
+done
+```
 
 ### 14.3 新バージョンの Helm チャートを取得
 
-新バージョンの Helm チャートをダウンロード・展開する。
+```bash
+# 新バージョンの Helm チャートを取得・展開
+NEW_CHART_PATH="/home/${USER}/collibra-dq-chart-${NEW_DQ_VERSION}"
+mkdir -p "${NEW_CHART_PATH}"
+wget -O collibra-dq-chart-new.zip "<新バージョンのダウンロードURL>"
+unzip collibra-dq-chart-new.zip -d "${NEW_CHART_PATH}"
+```
 
 ### 14.4 helm upgrade の実行
 
-`custom-values.yaml` のバージョンを更新し、`helm upgrade` を実行してローリングアップデートを行う。
+```bash
+# custom-values-aro.yaml のバージョンを更新
+sed -i \
+  "s/dq: \"${DQ_VERSION}\"/dq: \"${NEW_DQ_VERSION}\"/" \
+  ~/custom-values-aro.yaml
+sed -i \
+  "s/spark: \"${SPARK_VERSION}\"/spark: \"${NEW_SPARK_VERSION}\"/" \
+  ~/custom-values-aro.yaml
+
+# アップグレード実行
+helm upgrade "${HELM_RELEASE_NAME}" "${NEW_CHART_PATH}" \
+  --namespace "${OC_PROJECT}" \
+  --values ~/custom-values-aro.yaml \
+  --timeout 15m \
+  --wait
+```
+
+ローリングアップデートの進行を確認する（ARO では `oc rollout` を使用）。
+
+```bash
+oc rollout status deployment/collibra-dq-web -n "${OC_PROJECT}"
+oc rollout status deployment/collibra-dq-agent -n "${OC_PROJECT}"
+```
+
+**アップグレード完了後の確認:**
+
+```bash
+# バージョンが更新されていることを確認
+helm list -n "${OC_PROJECT}"
+oc get pods -n "${OC_PROJECT}" \
+  -o jsonpath='{.items[*].spec.containers[*].image}' | tr ' ' '\n'
+
+# DQ Web にログインしてバージョン表示を確認
+# 画面右上メニュー > About > バージョン番号
+```
 
 ### 14.5 ロールバック手順
 
-アップグレード後に問題が発生した場合、`helm rollback` で前バージョンに戻す。
+アップグレード後に問題が発生した場合、Helm を使用して前バージョンに戻す。
+
+```bash
+# Helm リリース履歴を確認（REVISION 番号を控える）
+helm history "${HELM_RELEASE_NAME}" -n "${OC_PROJECT}"
+```
+
+**出力例:**
+
+```
+REVISION  UPDATED       STATUS      CHART               DESCRIPTION
+1         2026-03-01    superseded  collibra-dq-2026.02  Install complete
+2         2026-06-01    deployed    collibra-dq-2026.05  Upgrade complete
+```
+
+```bash
+# 前のリビジョン（例: 1）にロールバック
+helm rollback "${HELM_RELEASE_NAME}" 1 \
+  --namespace "${OC_PROJECT}" \
+  --wait
+
+# ロールバック完了を確認
+oc rollout status deployment/collibra-dq-web -n "${OC_PROJECT}"
+helm list -n "${OC_PROJECT}"
+```
+
+> **補足**: ロールバック後もデータベーススキーマが新バージョンで変更されている場合、旧バージョンのアプリケーションと互換性がない可能性がある。Collibra のリリースノートでスキーママイグレーションの有無を事前に確認すること。
 
 ---
 
