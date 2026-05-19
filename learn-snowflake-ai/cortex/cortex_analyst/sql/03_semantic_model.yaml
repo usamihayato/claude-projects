@@ -1,0 +1,377 @@
+name: sales_analyst_model
+description: |
+  売上分析モデル。
+  ANALYST_DEMO_DB.ANALYST_SCHEMA 配下の以下 4 テーブルを対象とする:
+    - SALES_ORDERS  : 売上注文（メインテーブル）
+    - CUSTOMERS     : 顧客マスタ
+    - PRODUCTS      : 商品マスタ
+    - SALES_TARGETS : 売上目標
+  売上集計・商品分析・顧客分析・目標対比などの質問に対応。
+
+tables:
+  # ================================================================
+  # SALES_ORDERS: 売上注文テーブル
+  # ================================================================
+  - name: sales_orders
+    description: |
+      売上注文テーブル。1行が1注文を表す。
+      キャンセル注文（status = 'cancelled'）は売上集計から除外すること。
+      TOTAL_AMOUNT は QUANTITY × UNIT_PRICE（税抜・円）。
+    base_table:
+      database: ANALYST_DEMO_DB
+      schema: ANALYST_SCHEMA
+      table: SALES_ORDERS
+    columns:
+      - name: order_id
+        description: "注文ID（主キー）。ORD-xxxxx 形式。"
+        data_type: VARCHAR
+      - name: order_date
+        description: "注文日（DATE型）。月次・週次・日次の集計に使用する。"
+        data_type: DATE
+      - name: customer_id
+        description: "顧客ID。CUSTOMERS テーブルの CUSTOMER_ID と結合できる。"
+        data_type: VARCHAR
+      - name: product_id
+        description: "商品ID。PRODUCTS テーブルの PRODUCT_ID と結合できる。"
+        data_type: VARCHAR
+      - name: product_name
+        description: "商品名（非正規化）。商品別集計に使用可能。"
+        data_type: VARCHAR
+      - name: category
+        description: |
+          商品カテゴリ。以下の値が存在する:
+          電子機器, 食品, 衣類, 書籍, スポーツ
+        data_type: VARCHAR
+        sample_values:
+          - "電子機器"
+          - "食品"
+          - "衣類"
+          - "書籍"
+          - "スポーツ"
+      - name: quantity
+        description: "注文数量（個）。"
+        data_type: NUMBER
+      - name: unit_price
+        description: "単価（税抜・円）。"
+        data_type: NUMBER
+      - name: total_amount
+        description: "合計金額 = QUANTITY × UNIT_PRICE（税抜・円）。"
+        data_type: NUMBER
+      - name: region
+        description: |
+          販売地域。以下の値が存在する:
+          東日本（関東・東北・北海道）, 西日本（関西・中国・四国・九州）, 海外
+        data_type: VARCHAR
+        sample_values:
+          - "東日本"
+          - "西日本"
+          - "海外"
+      - name: status
+        description: |
+          注文ステータス。売上集計では必ず cancelled を除外すること。
+          pending   = 処理中（未確定）
+          confirmed = 確定済み
+          shipped   = 出荷済み
+          completed = 完了
+          cancelled = キャンセル（売上に含めない）
+        data_type: VARCHAR
+        sample_values:
+          - "pending"
+          - "confirmed"
+          - "shipped"
+          - "completed"
+          - "cancelled"
+    time_dimensions:
+      - column_name: order_date
+        description: "注文日。月次・週次・日次・年次の集計に使用する。"
+    measures:
+      - name: total_sales
+        description: "売上合計（キャンセル除く・税抜・円）"
+        expr: SUM(CASE WHEN status != 'cancelled' THEN total_amount ELSE 0 END)
+        data_type: NUMBER
+      - name: order_count
+        description: "注文件数（キャンセル除く）"
+        expr: COUNT(CASE WHEN status != 'cancelled' THEN order_id END)
+        data_type: NUMBER
+      - name: avg_order_value
+        description: "平均注文金額（キャンセル除く・税抜・円）"
+        expr: AVG(CASE WHEN status != 'cancelled' THEN total_amount END)
+        data_type: NUMBER
+      - name: cancelled_count
+        description: "キャンセル件数"
+        expr: COUNT(CASE WHEN status = 'cancelled' THEN order_id END)
+        data_type: NUMBER
+      - name: cancelled_rate
+        description: "キャンセル率（%）= キャンセル件数 / 全注文件数 × 100"
+        expr: |
+          ROUND(
+            COUNT(CASE WHEN status = 'cancelled' THEN order_id END) * 100.0
+            / NULLIF(COUNT(order_id), 0),
+            1
+          )
+        data_type: NUMBER
+      - name: total_quantity
+        description: "注文数量合計（キャンセル除く）"
+        expr: SUM(CASE WHEN status != 'cancelled' THEN quantity ELSE 0 END)
+        data_type: NUMBER
+
+  # ================================================================
+  # CUSTOMERS: 顧客マスタ
+  # ================================================================
+  - name: customers
+    description: |
+      顧客マスタ。1行が1顧客を表す。
+      SEGMENT で法人・個人を区別できる。
+    base_table:
+      database: ANALYST_DEMO_DB
+      schema: ANALYST_SCHEMA
+      table: CUSTOMERS
+    columns:
+      - name: customer_id
+        description: "顧客ID（主キー）。C001〜C020 形式。"
+        data_type: VARCHAR
+      - name: customer_name
+        description: "顧客名（法人名または個人名）。"
+        data_type: VARCHAR
+      - name: segment
+        description: |
+          顧客セグメント。
+          法人 = 企業・団体顧客
+          個人 = 個人顧客
+        data_type: VARCHAR
+        sample_values:
+          - "法人"
+          - "個人"
+      - name: prefecture
+        description: "都道府県名（例: 東京都, 大阪府, 北海道）。"
+        data_type: VARCHAR
+      - name: registered_date
+        description: "顧客登録日。新規顧客分析に使用する。"
+        data_type: DATE
+    time_dimensions:
+      - column_name: registered_date
+        description: "顧客登録日。新規顧客のトレンド分析に使用する。"
+
+  # ================================================================
+  # PRODUCTS: 商品マスタ
+  # ================================================================
+  - name: products
+    description: |
+      商品マスタ。1行が1商品を表す。
+      COST_PRICE（原価）と LIST_PRICE（定価）の差が粗利。
+      IS_ACTIVE = FALSE の商品は販売終了。
+    base_table:
+      database: ANALYST_DEMO_DB
+      schema: ANALYST_SCHEMA
+      table: PRODUCTS
+    columns:
+      - name: product_id
+        description: "商品ID（主キー）。P001〜P020 形式。"
+        data_type: VARCHAR
+      - name: product_name
+        description: "商品名。"
+        data_type: VARCHAR
+      - name: category
+        description: |
+          商品カテゴリ。
+          電子機器, 食品, 衣類, 書籍, スポーツ
+        data_type: VARCHAR
+        sample_values:
+          - "電子機器"
+          - "食品"
+          - "衣類"
+          - "書籍"
+          - "スポーツ"
+      - name: cost_price
+        description: "原価（税抜・円）。"
+        data_type: NUMBER
+      - name: list_price
+        description: "定価（税抜・円）。"
+        data_type: NUMBER
+      - name: is_active
+        description: "販売中フラグ。TRUE=販売中, FALSE=販売終了。"
+        data_type: BOOLEAN
+    measures:
+      - name: product_count
+        description: "商品点数（販売中）"
+        expr: COUNT(CASE WHEN is_active = TRUE THEN product_id END)
+        data_type: NUMBER
+      - name: avg_list_price
+        description: "平均定価（税抜・円）"
+        expr: AVG(list_price)
+        data_type: NUMBER
+      - name: avg_margin_rate
+        description: "平均粗利率（%）= (定価 - 原価) / 定価 × 100"
+        expr: ROUND(AVG((list_price - cost_price) / NULLIF(list_price, 0) * 100), 1)
+        data_type: NUMBER
+
+  # ================================================================
+  # SALES_TARGETS: 売上目標
+  # ================================================================
+  - name: sales_targets
+    description: |
+      月次売上目標テーブル。地域・カテゴリ・年月ごとの目標金額を格納。
+      実績と目標を比較する際に SALES_ORDERS と結合して使用する。
+    base_table:
+      database: ANALYST_DEMO_DB
+      schema: ANALYST_SCHEMA
+      table: SALES_TARGETS
+    columns:
+      - name: target_year
+        description: "目標年度（例: 2024, 2025）。"
+        data_type: NUMBER
+      - name: target_month
+        description: "目標月（1〜12）。"
+        data_type: NUMBER
+      - name: region
+        description: "地域（東日本/西日本/海外）。"
+        data_type: VARCHAR
+        sample_values:
+          - "東日本"
+          - "西日本"
+          - "海外"
+      - name: category
+        description: "商品カテゴリ（電子機器/食品/衣類/書籍/スポーツ）。"
+        data_type: VARCHAR
+      - name: target_amount
+        description: "売上目標金額（税抜・円）。"
+        data_type: NUMBER
+    measures:
+      - name: total_target
+        description: "目標金額合計（円）"
+        expr: SUM(target_amount)
+        data_type: NUMBER
+
+# ================================================================
+# リレーション（テーブル結合定義）
+# ================================================================
+
+relationships:
+  - name: orders_to_customers
+    description: "売上注文 → 顧客マスタ（CUSTOMER_ID で結合）"
+    left_table: sales_orders
+    right_table: customers
+    join_type: LEFT
+    relationship_columns:
+      - left_column: customer_id
+        right_column: customer_id
+
+  - name: orders_to_products
+    description: "売上注文 → 商品マスタ（PRODUCT_ID で結合）"
+    left_table: sales_orders
+    right_table: products
+    join_type: LEFT
+    relationship_columns:
+      - left_column: product_id
+        right_column: product_id
+
+# ================================================================
+# Verified Queries（よく使う質問の正解 SQL）
+# ================================================================
+
+verified_queries:
+  - name: monthly_sales_trend
+    question: "月別の売上合計と注文件数の推移を教えて"
+    sql: |
+      SELECT
+        DATE_TRUNC('MONTH', order_date) AS month,
+        SUM(CASE WHEN status != 'cancelled' THEN total_amount ELSE 0 END) AS total_sales,
+        COUNT(CASE WHEN status != 'cancelled' THEN order_id END)           AS order_count
+      FROM SALES_ORDERS
+      GROUP BY 1
+      ORDER BY 1
+
+  - name: top5_products_last_month
+    question: "先月の売上上位5商品は？"
+    sql: |
+      SELECT
+        product_name,
+        SUM(total_amount) AS total_sales,
+        COUNT(order_id)   AS order_count
+      FROM SALES_ORDERS
+      WHERE
+        status != 'cancelled'
+        AND DATE_TRUNC('MONTH', order_date)
+            = DATE_TRUNC('MONTH', DATEADD('MONTH', -1, CURRENT_DATE()))
+      GROUP BY product_name
+      ORDER BY total_sales DESC
+      LIMIT 5
+
+  - name: sales_by_category
+    question: "カテゴリ別の売上合計と構成比"
+    sql: |
+      SELECT
+        category,
+        SUM(CASE WHEN status != 'cancelled' THEN total_amount ELSE 0 END)  AS total_sales,
+        ROUND(
+          SUM(CASE WHEN status != 'cancelled' THEN total_amount ELSE 0 END) * 100.0
+          / SUM(SUM(CASE WHEN status != 'cancelled' THEN total_amount ELSE 0 END)) OVER (),
+          1
+        ) AS sales_ratio_pct
+      FROM SALES_ORDERS
+      GROUP BY category
+      ORDER BY total_sales DESC
+
+  - name: sales_by_customer_segment
+    question: "法人顧客と個人顧客の売上比較"
+    sql: |
+      SELECT
+        c.segment,
+        SUM(CASE WHEN o.status != 'cancelled' THEN o.total_amount ELSE 0 END) AS total_sales,
+        COUNT(CASE WHEN o.status != 'cancelled' THEN o.order_id END)           AS order_count,
+        AVG(CASE WHEN o.status != 'cancelled' THEN o.total_amount END)         AS avg_order_value
+      FROM SALES_ORDERS o
+      LEFT JOIN CUSTOMERS c ON o.customer_id = c.customer_id
+      GROUP BY c.segment
+      ORDER BY total_sales DESC
+
+  - name: region_monthly_sales
+    question: "地域別の月次売上推移"
+    sql: |
+      SELECT
+        DATE_TRUNC('MONTH', order_date) AS month,
+        region,
+        SUM(CASE WHEN status != 'cancelled' THEN total_amount ELSE 0 END) AS total_sales
+      FROM SALES_ORDERS
+      GROUP BY 1, 2
+      ORDER BY 1, 2
+
+  - name: this_year_sales_total
+    question: "今年の売上合計は？"
+    sql: |
+      SELECT
+        SUM(CASE WHEN status != 'cancelled' THEN total_amount ELSE 0 END) AS total_sales,
+        COUNT(CASE WHEN status != 'cancelled' THEN order_id END)           AS order_count
+      FROM SALES_ORDERS
+      WHERE YEAR(order_date) = YEAR(CURRENT_DATE())
+
+  - name: top_customers_ytd
+    question: "今年の売上上位顧客トップ10"
+    sql: |
+      SELECT
+        c.customer_name,
+        c.segment,
+        SUM(CASE WHEN o.status != 'cancelled' THEN o.total_amount ELSE 0 END) AS total_sales,
+        COUNT(CASE WHEN o.status != 'cancelled' THEN o.order_id END)           AS order_count
+      FROM SALES_ORDERS o
+      LEFT JOIN CUSTOMERS c ON o.customer_id = c.customer_id
+      WHERE YEAR(o.order_date) = YEAR(CURRENT_DATE())
+      GROUP BY c.customer_name, c.segment
+      ORDER BY total_sales DESC
+      LIMIT 10
+
+  - name: cancelled_rate_by_category
+    question: "カテゴリ別のキャンセル率"
+    sql: |
+      SELECT
+        category,
+        COUNT(order_id)                                              AS total_orders,
+        COUNT(CASE WHEN status = 'cancelled' THEN order_id END)      AS cancelled_orders,
+        ROUND(
+          COUNT(CASE WHEN status = 'cancelled' THEN order_id END) * 100.0
+          / NULLIF(COUNT(order_id), 0),
+          1
+        ) AS cancelled_rate_pct
+      FROM SALES_ORDERS
+      GROUP BY category
+      ORDER BY cancelled_rate_pct DESC

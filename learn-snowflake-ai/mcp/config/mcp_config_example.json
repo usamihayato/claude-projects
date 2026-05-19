@@ -1,0 +1,49 @@
+{
+  "_comment": [
+    "Snowflake MCP Server 設定サンプル",
+    "実際の値に置き換えて使用してください。",
+    "",
+    "【Claude Desktop の場合】",
+    "  このファイルの内容を以下に貼り付ける:",
+    "  macOS: ~/Library/Application Support/Claude/claude_desktop_config.json",
+    "  Windows: %APPDATA%\\Claude\\claude_desktop_config.json",
+    "",
+    "【Claude Code の場合】",
+    "  プロジェクトルートに .mcp.json として保存する（_comment キーは削除）",
+    "  または: claude mcp add コマンドで登録する"
+  ],
+
+  "mcpServers": {
+
+    "snowflake": {
+      "_comment": "パスワード認証（開発・デモ用途向け）",
+      "command": "uvx",
+      "args": ["snowflake-mcp"],
+      "env": {
+        "SNOWFLAKE_ACCOUNT":   "<orgname>-<accountname>",
+        "SNOWFLAKE_USER":      "<your_username>",
+        "SNOWFLAKE_PASSWORD":  "<your_password>",
+        "SNOWFLAKE_WAREHOUSE": "ANALYST_WH",
+        "SNOWFLAKE_DATABASE":  "ANALYST_DEMO_DB",
+        "SNOWFLAKE_SCHEMA":    "ANALYST_SCHEMA",
+        "SNOWFLAKE_ROLE":      "ANALYST_USER"
+      }
+    },
+
+    "snowflake-keypair": {
+      "_comment": "キーペア認証（本番・セキュアな用途向け）。パスワードを平文で書かなくて済む",
+      "command": "uvx",
+      "args": ["snowflake-mcp"],
+      "env": {
+        "SNOWFLAKE_ACCOUNT":          "<orgname>-<accountname>",
+        "SNOWFLAKE_USER":             "<your_username>",
+        "SNOWFLAKE_PRIVATE_KEY_PATH": "/path/to/rsa_key.p8",
+        "SNOWFLAKE_WAREHOUSE":        "ANALYST_WH",
+        "SNOWFLAKE_DATABASE":         "ANALYST_DEMO_DB",
+        "SNOWFLAKE_SCHEMA":           "ANALYST_SCHEMA",
+        "SNOWFLAKE_ROLE":             "ANALYST_USER"
+      }
+    }
+
+  }
+}
