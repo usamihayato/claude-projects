@@ -394,5 +394,5 @@ ALTER TASK update_embeddings_task RESUME;
 
 ## 次のステップ
 
-- [デモアプリ作成](./05_demo_app.md) - Streamlit in Snowflake でアプリを構築
-- [Cortex Search](./03_cortex_search.md) - より高度な検索機能を活用
+- [Cortex Search の詳細](./03_cortex_search.md) — より高度な検索機能を活用
+- [他サービスとの差別化](./05_differentiation.md) — ビジネス価値を最大化する

@@ -259,5 +259,5 @@ graph TD
 
 ## 次のステップ
 
-- [Cortexを使ったRAGサンプル](./04_cortex_rag_sample.md) - 実際にコードを書いてみる
-- [デモアプリ作成](./05_demo_app.md) - Streamlit でアプリを構築する
+- [Cortex を使った RAG サンプル](./04_cortex_rag_sample.md) — 実際にコードを書いてみる
+- [Cortex Search の詳細](./03_cortex_search.md) — エンタープライズ向け検索サービスの全機能

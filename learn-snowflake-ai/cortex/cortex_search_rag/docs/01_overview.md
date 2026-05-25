@@ -44,20 +44,14 @@ cortex_search_rag/
 │   ├── 02_rag_components.md           ← RAG の構成要素（チャンキング・Embedding・検索）
 │   ├── 03_cortex_search.md            ← Cortex Search の詳細仕様・設計パターン
 │   ├── 04_cortex_rag_sample.md        ← ハンズオン（環境構築 → データ投入 → 検索）
-│   ├── 05_demo_app.md                 ← Streamlit in Snowflake でのデモアプリ実装
-│   ├── 06_differentiation.md          ← 他サービス（Elasticsearch 等）との比較
-│   ├── 07_hybrid_search.md            ← ハイブリッド検索の設計・SQL パターン
-│   └── 08_structured_data_patterns.md ← 構造化データ × RAG の統合パターン
+│   └── 05_differentiation.md         ← 他サービス（NotebookLM 等）との差別化
 └── sql/
     ├── 01_setup.sql                   ← 環境セットアップ
     ├── 02_sample_data.sql             ← サンプルドキュメントデータ投入
     ├── 03_chunking_and_embedding.sql  ← テキストチャンキング・Embedding 生成
     ├── 04_rag_queries.sql             ← RAG クエリパターン集
     ├── 05_cortex_search_setup.sql     ← Cortex Search Service 作成
-    ├── 06_stored_procedures.sql       ← RAG 用ストアドプロシージャ
-    ├── 07_hybrid_search.sql           ← ハイブリッド検索 SQL
-    ├── 08_code_master_rag.sql         ← コードマスター RAG 実装
-    └── 09_cortex_analyst_rag.sql      ← Cortex Analyst との統合
+    └── 06_stored_procedures.sql       ← RAG 用ストアドプロシージャ
 ```
 
 ---
@@ -72,13 +66,10 @@ cortex_search_rag/
    → 03_cortex_search.md
 
 3. ハンズオンで動かす
-   → 04_cortex_rag_sample.md（SQL: 01〜05）
+   → 04_cortex_rag_sample.md（SQL: 01〜06）
 
-4. デモアプリを作る
-   → 05_demo_app.md（SQL: 06）
-
-5. 応用パターンを学ぶ
-   → 07_hybrid_search.md, 08_structured_data_patterns.md
+4. 他サービスとの差別化ポイントを押さえる
+   → 05_differentiation.md
 ```
 
 ---
