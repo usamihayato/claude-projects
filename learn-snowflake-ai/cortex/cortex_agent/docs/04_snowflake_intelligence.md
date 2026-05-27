@@ -261,16 +261,83 @@ CREATE OR REPLACE AGENT ANALYST_DEMO_DB.ANALYST_SCHEMA.SALES_INTELLIGENCE_AGENT
       - tool_spec:
           type: cortex_search_service
           name: doc_search
-          description: "社内ドキュメント（施策・規定・報告書）を検索する"
+          # ↓ エージェントがいつこのツールを使うかを判断する重要な説明文
+          description: >
+            社内ドキュメント（キャンペーン施策・物流報告・社内規定）を全文検索する。
+            売上数値の背景・原因調査、施策の詳細確認、配送・在庫に関する報告書の参照に使用する。
 
     tool_resources:
       sales_analyst:
         semantic_model_file: "@ANALYST_DEMO_DB.ANALYST_SCHEMA.SEMANTIC_MODEL_STAGE/03_semantic_model.yaml"
       doc_search:
+        # Cortex Search Service の完全修飾名
         name: "ANALYST_DEMO_DB.ANALYST_SCHEMA.COMPANY_DOC_SEARCH"
+        # 返す検索結果の最大件数
         max_results: "5"
+        # 検索結果のタイトルとして表示するカラム（ATTRIBUTES に含まれるカラム）
+        title_column: "doc_name"
+        # ドキュメントを一意に識別するカラム
+        id_column: "doc_id"
+        # filter: カテゴリを絞り込む場合のみ設定（全カテゴリ対象なら省略）
+        # filter:
+        #   "@eq":
+        #     category: "キャンペーン"
+        # カラムの意味をエージェントに説明（フィルターを動的に使いこなすために推奨）
+        columns_and_descriptions:
+          - column: "doc_name"
+            description: "ドキュメントのタイトル"
+          - column: "category"
+            description: "ドキュメントのカテゴリ。値は キャンペーン / 物流 / 社内規定 のいずれか"
+          - column: "content"
+            description: "ドキュメントの本文。キャンペーン施策・配送報告・社内規定の詳細が含まれる"
   $$;
 ```
+
+---
+
+#### Cortex Search ツール — パラメータ入力ガイド
+
+Cortex Search をツールとして登録する際の全パラメータを整理します。
+
+**tool_spec（ツールの識別と使い方の説明）**
+
+| パラメータ | 役割 | デモでの入力値 | 入力指針 |
+|---|---|---|---|
+| `type` | ツール種別の固定値 | `cortex_search_service` | 変更不要 |
+| `name` | エージェントがツールを参照する識別子 | `doc_search` | 英小文字・アンダースコアで命名 |
+| `description` | **エージェントがいつこのツールを使うかを判断する根拠**（最重要） | 下記参照 | 「何を検索できるか」「どんな質問に使うか」を具体的に書く |
+
+`description` の推奨記述:
+```
+社内ドキュメント（キャンペーン施策・物流報告・社内規定）を全文検索する。
+売上数値の背景・原因調査、施策の詳細確認、配送・在庫に関する報告書の参照に使用する。
+```
+
+> ⚠️ `description` が曖昧だとエージェントがツールを呼ばないケースがあります。  
+> 「何が入っているか」と「どんな質問に答えられるか」の両方を書くのがポイントです。
+
+---
+
+**tool_resources（ツールのリソース設定）**
+
+| パラメータ | 役割 | デモでの入力値 | 入力指針 |
+|---|---|---|---|
+| `name` | Cortex Search Service の完全修飾名 | `ANALYST_DEMO_DB.ANALYST_SCHEMA.COMPANY_DOC_SEARCH` | `DB.SCHEMA.SERVICE_NAME` 形式で指定 |
+| `max_results` | 返す検索結果の最大件数 | `5` | 3〜10 が目安。多いほど回答の根拠が増えるがトークン消費も増える |
+| `title_column` | 検索結果のタイトルとして表示するカラム | `doc_name` | Search Service の ATTRIBUTES に含まれるカラムを指定 |
+| `id_column` | ドキュメントを一意に識別するカラム | `doc_id` | PK カラムを指定。省略可だが設定推奨 |
+| `filter` | 特定の属性値で結果を絞り込む | （省略 — 全カテゴリ対象） | 特定カテゴリのみにしたい場合に設定。動的フィルターを使いたければ `columns_and_descriptions` で十分 |
+| `columns_and_descriptions` | 各カラムの意味をエージェントに説明 | 下記参照 | filterable/searchable なカラムに説明を付けると、エージェントが動的フィルターを使いこなせるようになる |
+
+`columns_and_descriptions` の推奨記述（デモ用）:
+
+| column | description |
+|---|---|
+| `doc_name` | ドキュメントのタイトル |
+| `category` | ドキュメントのカテゴリ。値は `キャンペーン` / `物流` / `社内規定` のいずれか |
+| `content` | ドキュメントの本文。キャンペーン施策・配送報告・社内規定の詳細が含まれる |
+
+> `category` の説明に取りうる値を列挙しておくと、「キャンペーン施策だけ調べて」という質問でエージェントが自動的に `{"@eq": {"category": "キャンペーン"}}` フィルターを生成できます。
 
 ---
 
@@ -336,10 +403,21 @@ Add Data Source
 │    │ Model File:  ...SEMANTIC_MODEL_STAGE/03_semantic_model.yaml│
 │    └───────────────────────────────────────────────────────┘  │
 │    ┌─ Tool 2: Cortex Search ───────────────────────────────┐  │
-│    │ Name:        doc_search                               │  │
-│    │ Type:        cortex_search_service                    │  │
-│    │ Description: 社内ドキュメント（施策・規定）を検索する  │  │
-│    │ Service:     ...ANALYST_SCHEMA.COMPANY_DOC_SEARCH     │  │
+│    │ Name:         doc_search                             │  │
+│    │ Type:         cortex_search_service                  │  │
+│    │ Description:  社内ドキュメント（キャンペーン施策・    │  │
+│    │               物流報告・社内規定）を全文検索する。    │  │
+│    │               売上数値の背景・原因調査、施策詳細確認  │  │
+│    │               に使用する。                           │  │
+│    │ Service:      ...ANALYST_SCHEMA.COMPANY_DOC_SEARCH   │  │
+│    │ Max Results:  5                                      │  │
+│    │ Title Column: doc_name                               │  │
+│    │ ID Column:    doc_id                                 │  │
+│    │ Filter:       （空欄 — 全カテゴリ対象）               │  │
+│    │ Column Descriptions:                                 │  │
+│    │   doc_name  → ドキュメントのタイトル                 │  │
+│    │   category  → カテゴリ（キャンペーン/物流/社内規定） │  │
+│    │   content   → ドキュメント本文                      │  │
 │    └───────────────────────────────────────────────────────┘  │
 │                                                                │
 │  Warehouse: [ANALYST_WH            ▼]                         │
