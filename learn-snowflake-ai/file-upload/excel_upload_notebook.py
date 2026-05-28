@@ -11,8 +11,9 @@
 # 【テーブル構成】
 #   EXCEL_UPLOADS
 #     FILE_NAME    VARCHAR   : アップロードしたファイル名
+#     SHEET_NAME   VARCHAR   : シート名
 #     UPLOADED_AT  TIMESTAMP : 保存日時（自動設定）
-#     CONTENT      TEXT      : パース済み全テキスト（シート名＋行データ）
+#     CONTENT      TEXT      : 当該シートのパース済みテキスト（行データ）
 #     ROW_COUNT    NUMBER    : 有効行数
 # =============================================================
 
@@ -47,11 +48,28 @@ def extract_from_excel(buffer: bytes, include_sheet_names: bool = True) -> str:
     # ▲▲▲ 既存コードここまで ▲▲▲
 
 
+def extract_sheets_from_excel(buffer: bytes) -> dict[str, str]:
+    """シートごとのテキストを {シート名: 行データ文字列} の辞書で返す"""
+    wb = openpyxl.load_workbook(io.BytesIO(buffer), data_only=True)
+    sheets: dict[str, str] = {}
+
+    for sheet_name in wb.sheetnames:
+        ws = wb[sheet_name]
+        lines = []
+        for row in ws.iter_rows(values_only=True):
+            line = "\t".join("" if v is None else str(v) for v in row)
+            lines.append(line)
+        sheets[sheet_name] = "\n".join(lines)
+
+    return sheets
+
+
 # ---- Cell 2: テーブル作成（初回のみ実行） ----
 
 session.sql("""
     CREATE TABLE IF NOT EXISTS EXCEL_UPLOADS (
         FILE_NAME    VARCHAR(512)  NOT NULL,
+        SHEET_NAME   VARCHAR(512)  NOT NULL,
         UPLOADED_AT  TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP(),
         CONTENT      TEXT,
         ROW_COUNT    NUMBER(10, 0)
@@ -72,23 +90,28 @@ file_path = f"/workspace/{FILE_NAME}"
 with open(file_path, "rb") as f:
     buffer = f.read()
 
-# パース
-content = extract_from_excel(buffer)
+# シートごとにパース
+sheets = extract_sheets_from_excel(buffer)
 
-# 空行を除いた有効行数を集計
-row_count = sum(1 for line in content.split("\n") if line.strip())
-
-# Snowpark でテーブルに追記
+# シートごとにレコードを作成
 from snowflake.snowpark import Row
 
-df = session.create_dataframe([
+uploaded_at = datetime.now()
+rows = [
     Row(
         FILE_NAME=FILE_NAME,
-        UPLOADED_AT=datetime.now(),
+        SHEET_NAME=sheet_name,
+        UPLOADED_AT=uploaded_at,
         CONTENT=content,
-        ROW_COUNT=row_count,
+        ROW_COUNT=sum(1 for line in content.split("\n") if line.strip()),
     )
-])
+    for sheet_name, content in sheets.items()
+]
+
+df = session.create_dataframe(rows)
 df.write.mode("append").save_as_table("EXCEL_UPLOADS")
 
-print(f"保存完了: {FILE_NAME}  ({row_count:,} 行)")
+print(f"保存完了: {FILE_NAME}")
+for sheet_name, content in sheets.items():
+    row_count = sum(1 for line in content.split("\n") if line.strip())
+    print(f"  - {sheet_name}: {row_count:,} 行")
