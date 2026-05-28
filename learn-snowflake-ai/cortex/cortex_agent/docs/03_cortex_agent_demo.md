@@ -330,6 +330,85 @@ CALL ANALYST_DEMO_DB.ANALYST_SCHEMA.agent_report(
 
 ---
 
+## Step 5: Snowflake Intelligence から利用する（ノーコード版）
+
+Streamlit アプリを実装せずに、同じ Analyst + Search 統合を **Snowflake Intelligence** の UI で実現できます。  
+Intelligence に「Agent データソース」として登録するのがポイントです。
+
+> ⚠️ Intelligence の「Semantic Model 直接接続」では Cortex Search は使えません。  
+> **「Agent」タイプのデータソース**として登録することで Cortex Search が利用可能になります。
+
+### Intelligence への登録手順
+
+```
+1. Snowsight > AI & ML > Intelligence
+2. + Create Intelligence App → 名前入力 → Create
+3. + Add Data Source
+     Type: Agent（← Semantic Model ではなく Agent を選ぶ）
+4. 以下を設定する:
+```
+
+**システムプロンプト（オーケストレーション制御）:**
+
+```
+あなたはEC事業の売上分析と社内情報の調査を一体的に支援するビジネスアシスタントです。
+
+## ツール使い分けのルール
+
+### sales_analyst（Cortex Analyst）を使う場面
+- 売上・注文件数・売上高などの数値を知りたい場合
+- 商品・カテゴリ・期間・地域などでデータを絞り込みたい場合
+- 前月比・前年比など時系列比較が必要な場合
+- ランキング・集計・トレンド分析が必要な場合
+
+### doc_search（Cortex Search）を使う場面
+- キャンペーン・施策の背景や詳細を調べる場合
+- 配送・物流・在庫に関する社内報告や規定を確認する場合
+- 売上数値の原因・背景を社内ドキュメントで裏付けたい場合
+
+### 両方を組み合わせて使う場面
+- 「なぜ売上が下がったか」のように数値と原因の両方が必要な場合
+- 施策の効果を定量的に検証したい場合
+
+## 回答スタイル
+- 必ず日本語で回答する
+- 数値を引用する際は期間・集計軸を明示する
+- ドキュメントを引用する際はドキュメント名を明示する
+- 複数の情報源を組み合わせた場合は、データとドキュメントの根拠をそれぞれ分けて示す
+```
+
+**ツール設定:**
+
+```
+Tool 1:
+  Name: sales_analyst
+  Type: cortex_analyst_text_to_sql
+  Semantic Model: @ANALYST_DEMO_DB.ANALYST_SCHEMA.SEMANTIC_MODEL_STAGE/03_semantic_model.yaml
+
+Tool 2:
+  Name: doc_search
+  Type: cortex_search_service
+  Service: ANALYST_DEMO_DB.ANALYST_SCHEMA.COMPANY_DOC_SEARCH
+
+Model: claude-3-5-sonnet（または llama3.1-70b）
+Warehouse: ANALYST_WH
+```
+
+```
+5. Warehouse: ANALYST_WH
+6. → Add → Publish
+```
+
+### Streamlit vs Intelligence の使い分け
+
+| 用途 | 推奨 |
+|---|---|
+| 社内ユーザー向けセルフサービス分析 | **Snowflake Intelligence** |
+| 独自ブランド・独自ロジックが必要 | **Streamlit in Snowflake** |
+| バックエンド API として使いたい | **Cortex Agent REST API** |
+
+---
+
 ## まとめ: Cortex Agent が解決する課題
 
 ```
@@ -338,6 +417,11 @@ CALL ANALYST_DEMO_DB.ANALYST_SCHEMA.agent_report(
 解決:
   Cortex Agent が Analyst（SQL 生成）+ Search（ドキュメント検索）を
   自律的に組み合わせて、1つの自然言語質問から統合回答を生成
+
+フロントエンドの選択肢:
+  ✓ Streamlit in Snowflake → コーディングで柔軟な UI を作れる
+  ✓ Snowflake Intelligence → コード不要でチャット UI が即完成
+    └── いずれも「Agent ツール構成」は同じ。フロントだけ違う
 
 効果:
   ✓ エンジニアがオーケストレーションコードを書かなくていい
@@ -350,6 +434,6 @@ CALL ANALYST_DEMO_DB.ANALYST_SCHEMA.agent_report(
 ## 関連ドキュメント
 
 - [02_cortex_agent.md](02_cortex_agent.md) — REST API 仕様・ツール定義
-- [04_snowflake_intelligence.md](04_snowflake_intelligence.md) — コードなしでデモする場合
+- [04_snowflake_intelligence.md](04_snowflake_intelligence.md) — Intelligence への詳細登録手順・オーケストレーション設計
 - [../cortex_search_rag/docs/05_demo_app.md](../cortex_search_rag/docs/05_demo_app.md) — Cortex Search 単体の Streamlit アプリ
 - [../cortex_analyst/docs/04_demo_app.md](../cortex_analyst/docs/04_demo_app.md) — Cortex Analyst 単体の Streamlit アプリ
