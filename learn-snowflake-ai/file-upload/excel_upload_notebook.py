@@ -3,7 +3,7 @@
 # =============================================================
 #
 # 【実行手順】
-#   1. Snowsight のノートブック左側「Files」タブから Excel をアップロード
+#   1. ワークスペースに Excel ファイルをアップロード
 #   2. Cell 3 の FILE_NAME を実際のファイル名に変更
 #   3. 初回のみ Cell 1〜Cell 3 をすべて実行
 #      2回目以降は Cell 1 と Cell 3 だけ実行すれば OK
@@ -66,8 +66,8 @@ print("テーブル準備完了")
 # ▼ アップロードしたファイル名を指定
 FILE_NAME = "sample.xlsx"
 
-# Snowflake Notebook の Files タブからアップしたファイルは /uploads/ に配置される
-file_path = f"/uploads/{FILE_NAME}"
+# ワークスペースにアップしたファイルは /workspace/ にマウントされる
+file_path = f"/workspace/{FILE_NAME}"
 
 with open(file_path, "rb") as f:
     buffer = f.read()
