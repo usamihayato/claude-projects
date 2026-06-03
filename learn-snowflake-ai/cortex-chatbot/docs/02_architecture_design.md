@@ -206,8 +206,8 @@ WHERE ai_summary IS NOT NULL
 
 ## 6. エージェント設計（Snowflake Intelligence）
 
-> **UIはStreamlitアプリではなく、Snowflake Intelligence を使用します。**
-> Intelligenceはエージェントを登録するだけで、チャットUIが自動的に提供されます。
+> **本プロジェクトでは Snowflake Intelligence を使用します。**
+> エージェントを登録するだけでチャットUIが自動的に提供されるため、カスタムUIの実装は不要です。
 
 ### Intelligence エージェント構成
 

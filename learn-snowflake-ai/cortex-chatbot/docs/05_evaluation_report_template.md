@@ -238,6 +238,6 @@ Hybrid:
 
 （別途Excelまたはスプレッドシートに記録）
 
-### C. Streamlit アプリ画面キャプチャ
+### C. Snowflake Intelligence 画面キャプチャ
 
-（デモ画面のスクリーンショットを添付）
+（Intelligence UI でのデモ画面スクリーンショットを添付）

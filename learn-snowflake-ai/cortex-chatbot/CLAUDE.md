@@ -32,7 +32,7 @@ cortex-chatbot/
     ├── 02_semantic_model.yaml             ← Cortex Analyst セマンティックモデル
     ├── 03_cortex_search_setup.sql         ← Cortex Search サービス設定
     ├── 04_agent_setup.sql                 ← エージェント設定・ストアドプロシージャ
-    └── 05_streamlit_app.py                ← Streamlit チャットUIアプリ
+    └── 05_intelligence_agent_config.sql   ← Snowflake Intelligence エージェント設定
 ```
 
 ## 関連ドキュメント
