@@ -1,0 +1,311 @@
+name: system_asset_model
+description: >
+  社内システムのジョブ・プログラム・テーブルのCRUD操作メタデータを管理するモデル。
+  「どのジョブが〇〇テーブルを使用/更新/削除しているか」といった影響調査クエリに特化。
+tables:
+  - name: T_<システム名>_CRUD
+    description: >
+      システムコンポーネント（ジョブ・機能）ごとのCRUD操作メタデータテーブル。
+      1レコード = 1つのジョブ×1テーブル/ファイルの組み合わせを表す。
+      例えばJOB001が受注テーブルをREADかつUPDATEしている場合、
+      crud_r_flag=1, crud_u_flag=1のレコードが存在する。
+    base_table: <DB_NAME>.<SCHEMA_NAME>.T_<システム名>_CRUD
+    filters: []
+    dimensions:
+      - name: ajs_name
+        synonyms:
+          - "ジョブ名"
+          - "ジョブ"
+          - "バッチ名"
+          - "バッチジョブ"
+          - "ジョブID"
+        description: AJSバッチスケジューラのジョブ名。バッチ処理の実行単位。
+        expr: ajs_name
+        data_type: TEXT
+        sample_values:
+          - "JOB_ORDER_001"
+          - "JOB_SHIP_002"
+          - "JOB_INV_003"
+
+      - name: net_name
+        synonyms:
+          - "ジョブネット名"
+          - "ジョブネット"
+          - "ネット名"
+          - "親ジョブ"
+          - "グループ"
+        description: 複数のジョブをまとめる親グループ（ジョブネット）の名前。
+        expr: net_name
+        data_type: TEXT
+
+      - name: src_name
+        synonyms:
+          - "ソースコード名"
+          - "プログラム名"
+          - "SQLファイル名"
+          - "ソースファイル"
+          - "スクリプト名"
+        description: ジョブが実行するSQLファイルまたはバッチスクリプトのファイル名。
+        expr: src_name
+        data_type: TEXT
+
+      - name: table_name_jp
+        synonyms:
+          - "テーブル名"
+          - "テーブル"
+          - "対象テーブル"
+          - "処理対象テーブル"
+          - "操作対象テーブル"
+        description: ジョブが操作する対象テーブルの日本語名称。
+        expr: table_name_jp
+        data_type: TEXT
+        sample_values:
+          - "受注テーブル"
+          - "出荷テーブル"
+          - "在庫マスタ"
+
+      - name: file_table_name
+        synonyms:
+          - "ファイル名"
+          - "CSVファイル名"
+          - "入出力ファイル名"
+        description: >
+          ファイルまたはテーブルの名称。file_table_flg=1の場合はCSVファイル名、
+          file_table_flg=0の場合はテーブル名。
+        expr: file_table_name
+        data_type: TEXT
+
+      - name: function_name
+        synonyms:
+          - "機能名"
+          - "機能"
+          - "業務機能"
+          - "処理名"
+        description: ジョブが属する業務機能の日本語名称。
+        expr: function_name
+        data_type: TEXT
+
+      - name: module_name
+        synonyms:
+          - "モジュール名"
+          - "モジュール"
+          - "サブシステム名"
+          - "サブシステム"
+        description: ジョブが属するシステムモジュールの日本語名称。
+        expr: module_name
+        data_type: TEXT
+
+      - name: system_name
+        synonyms:
+          - "システム名"
+          - "システム"
+        description: 対象システムの名称。
+        expr: system_name
+        data_type: TEXT
+
+      - name: crud_c_flag
+        synonyms:
+          - "CREATE操作"
+          - "作成フラグ"
+          - "INSERT操作"
+          - "追加操作"
+          - "登録操作"
+        description: >
+          CREATE（INSERT）操作があるか示すフラグ。
+          1=CREATE操作あり、0=なし。
+          「作成している」「INSERTしている」「追加している」「登録している」
+          という表現に対応。
+        expr: crud_c_flag
+        data_type: NUMBER
+
+      - name: crud_r_flag
+        synonyms:
+          - "READ操作"
+          - "参照フラグ"
+          - "SELECT操作"
+          - "読み取り操作"
+          - "参照操作"
+        description: >
+          READ（SELECT）操作があるか示すフラグ。
+          1=READ操作あり、0=なし。
+          「参照している」「SELECTしている」「読んでいる」という表現に対応。
+        expr: crud_r_flag
+        data_type: NUMBER
+
+      - name: crud_u_flag
+        synonyms:
+          - "UPDATE操作"
+          - "更新フラグ"
+          - "修正操作"
+          - "変更操作"
+          - "書き換え操作"
+        description: >
+          UPDATE操作があるか示すフラグ。
+          1=UPDATE操作あり、0=なし。
+          「更新している」「UPDATEしている」「修正している」「変更している」
+          という表現に対応。
+        expr: crud_u_flag
+        data_type: NUMBER
+
+      - name: crud_d_flag
+        synonyms:
+          - "DELETE操作"
+          - "削除フラグ"
+          - "消去操作"
+          - "レコード削除"
+        description: >
+          DELETE操作があるか示すフラグ。
+          1=DELETE操作あり、0=なし。
+          「削除している」「DELETEしている」「消去している」という表現に対応。
+        expr: crud_d_flag
+        data_type: NUMBER
+
+      - name: file_i_flg
+        synonyms:
+          - "ファイル取り込みフラグ"
+          - "ファイルインポート"
+          - "ファイル読み込み"
+          - "CSV取り込み"
+          - "入力ファイルあり"
+        description: >
+          ファイル取り込み（インポート）処理があるか示すフラグ。
+          1=ファイル取り込みあり、0=なし。
+          「ファイルを取り込んでいる」「CSVを読み込んでいる」という表現に対応。
+        expr: file_i_flg
+        data_type: NUMBER
+
+      - name: file_o_flg
+        synonyms:
+          - "ファイル出力フラグ"
+          - "ファイルエクスポート"
+          - "CSV出力"
+          - "ファイル書き出し"
+          - "出力ファイルあり"
+        description: >
+          ファイル出力処理があるか示すフラグ。
+          1=ファイル出力あり、0=なし。
+          「ファイルを出力している」「CSVを書き出している」という表現に対応。
+        expr: file_o_flg
+        data_type: NUMBER
+
+      - name: file_table_flg
+        synonyms:
+          - "ファイルフラグ"
+          - "ファイル種別フラグ"
+        description: >
+          file_table_nameの種別フラグ。
+          1=ファイル（CSVなど）、0=テーブル。
+        expr: file_table_flg
+        data_type: NUMBER
+
+    metrics:
+      - name: job_count
+        synonyms:
+          - "ジョブ数"
+          - "ジョブの件数"
+          - "バッチ数"
+        description: 条件に合致するジョブの数。
+        expr: COUNT(DISTINCT ajs_name)
+        data_type: NUMBER
+
+      - name: table_count
+        synonyms:
+          - "テーブル数"
+          - "テーブルの件数"
+          - "対象テーブル数"
+        description: 条件に合致するテーブルの数。
+        expr: COUNT(DISTINCT table_name_jp)
+        data_type: NUMBER
+
+      - name: program_count
+        synonyms:
+          - "プログラム数"
+          - "ソースファイル数"
+          - "SQLファイル数"
+        description: 条件に合致するソースファイルの数。
+        expr: COUNT(DISTINCT src_name)
+        data_type: NUMBER
+
+verified_queries:
+  - name: "テーブル使用ジョブ一覧"
+    question: "〇〇テーブルを使用しているジョブをすべて教えて"
+    sql: |
+      SELECT DISTINCT ajs_name, src_name, function_name, module_name
+      FROM T_<システム名>_CRUD
+      WHERE table_name_jp = '〇〇テーブル'
+        AND (crud_c_flag = 1 OR crud_r_flag = 1 OR crud_u_flag = 1 OR crud_d_flag = 1)
+      ORDER BY ajs_name
+
+  - name: "テーブルUPDATEジョブ"
+    question: "〇〇テーブルを更新しているジョブは？"
+    sql: |
+      SELECT DISTINCT ajs_name, src_name, function_name
+      FROM T_<システム名>_CRUD
+      WHERE table_name_jp = '〇〇テーブル'
+        AND crud_u_flag = 1
+      ORDER BY ajs_name
+
+  - name: "テーブルDELETEジョブ"
+    question: "〇〇テーブルを削除しているジョブは？"
+    sql: |
+      SELECT DISTINCT ajs_name, src_name, function_name
+      FROM T_<システム名>_CRUD
+      WHERE table_name_jp = '〇〇テーブル'
+        AND crud_d_flag = 1
+      ORDER BY ajs_name
+
+  - name: "ジョブ使用テーブル一覧"
+    question: "〇〇ジョブが使用しているテーブル一覧を教えて"
+    sql: |
+      SELECT DISTINCT table_name_jp, file_table_name,
+             crud_c_flag, crud_r_flag, crud_u_flag, crud_d_flag
+      FROM T_<システム名>_CRUD
+      WHERE ajs_name = '〇〇ジョブ'
+      ORDER BY table_name_jp
+
+  - name: "ジョブネット内ジョブ一覧"
+    question: "〇〇ジョブネットに含まれるジョブを教えて"
+    sql: |
+      SELECT DISTINCT ajs_name, src_name, function_name, module_name
+      FROM T_<システム名>_CRUD
+      WHERE net_name = '〇〇ジョブネット'
+      ORDER BY ajs_name
+
+  - name: "ファイル出力機能一覧"
+    question: "ファイル出力が発生する機能はどれですか？"
+    sql: |
+      SELECT DISTINCT function_name, module_name, ajs_name, file_table_name
+      FROM T_<システム名>_CRUD
+      WHERE file_o_flg = 1
+      ORDER BY module_name, function_name
+
+  - name: "ファイル取り込みジョブ一覧"
+    question: "ファイルを取り込んでいるジョブを教えて"
+    sql: |
+      SELECT DISTINCT ajs_name, function_name, file_table_name
+      FROM T_<システム名>_CRUD
+      WHERE file_i_flg = 1
+      ORDER BY ajs_name
+
+  - name: "モジュール機能一覧"
+    question: "〇〇モジュールに含まれる機能の一覧を教えて"
+    sql: |
+      SELECT DISTINCT function_name, COUNT(DISTINCT ajs_name) AS job_count
+      FROM T_<システム名>_CRUD
+      WHERE module_name = '〇〇モジュール'
+      GROUP BY function_name
+      ORDER BY function_name
+
+  - name: "CRUD操作別集計"
+    question: "テーブルごとのCRUD操作をしているジョブ数を集計して"
+    sql: |
+      SELECT
+          table_name_jp,
+          SUM(crud_c_flag) AS create_jobs,
+          SUM(crud_r_flag) AS read_jobs,
+          SUM(crud_u_flag) AS update_jobs,
+          SUM(crud_d_flag) AS delete_jobs,
+          COUNT(DISTINCT ajs_name) AS total_jobs
+      FROM T_<システム名>_CRUD
+      GROUP BY table_name_jp
+      ORDER BY total_jobs DESC
