@@ -1,7 +1,20 @@
 name: system_asset_model
 description: >
   社内システムのジョブ・プログラム・テーブルのCRUD操作メタデータを管理するモデル。
-  「どのジョブが〇〇テーブルを使用/更新/削除しているか」といった影響調査クエリに特化。
+  T_CRUD（CRUD操作フラグ・テーブル名）とT_SRC（ソースファイルメタ情報）の2テーブルを持ち、
+  影響調査・ファイル棚卸し・担当者別集計などの構造化クエリに対応する。
+  source_code/ai_summary の非構造化コンテンツは Cortex Search が担当する。
+
+relationships:
+  - name: crud_to_src
+    left_table: T_<システム名>_CRUD
+    right_table: T_<システム名>_SRC
+    relationship_columns:
+      - left_column: ajs_name
+        right_column: ajs_name
+    join_type: left_outer
+    relationship_type: many_to_many
+
 tables:
   - name: T_<システム名>_CRUD
     description: >
@@ -226,6 +239,104 @@ tables:
         expr: COUNT(DISTINCT src_name)
         data_type: NUMBER
 
+  # ============================================================
+  # T_<システム名>_SRC テーブル（構造化カラムのみ Analyst 対象）
+  # source_code / ai_summary は Cortex Search が担当するため含めない
+  # ============================================================
+  - name: T_<システム名>_SRC
+    description: >
+      ソースコードモジュールのメタ情報テーブル。
+      ファイル名・モジュール名・機能名・作成者・作成日などの構造化情報を持つ。
+      ソースコード本文(source_code)とAI概要(ai_summary)はCortex Searchが管理するため
+      このモデルには含めない。
+    base_table: <DB_NAME>.<SCHEMA_NAME>.T_<システム名>_SRC
+    filters: []
+    dimensions:
+      - name: file_name
+        synonyms:
+          - "ソースファイル名"
+          - "ファイル名"
+          - "SQLファイル名"
+          - "プログラムファイル名"
+          - "スクリプト名"
+        description: ソースコード・SQLファイルの実ファイル名。CRUDテーブルのsrc_nameと対応。
+        expr: file_name
+        data_type: TEXT
+
+      - name: module_name
+        synonyms:
+          - "モジュール名"
+          - "モジュール"
+          - "サブシステム名"
+        description: ソースファイルが属するシステムモジュールの日本語名称。
+        expr: module_name
+        data_type: TEXT
+
+      - name: function_name
+        synonyms:
+          - "機能名"
+          - "機能"
+          - "業務機能"
+          - "処理名"
+        description: ソースファイルが担当する業務機能の日本語名称。
+        expr: function_name
+        data_type: TEXT
+
+      - name: ajs_name
+        synonyms:
+          - "ジョブ名"
+          - "ジョブ"
+          - "バッチ名"
+        description: このソースファイルを実行するジョブ名。CRUDテーブルとの結合キー。
+        expr: ajs_name
+        data_type: TEXT
+
+      - name: net_name
+        synonyms:
+          - "ジョブネット名"
+          - "ジョブネット"
+        description: 所属するジョブネット名。
+        expr: net_name
+        data_type: TEXT
+
+      - name: system_name
+        synonyms:
+          - "システム名"
+        description: 対象システムの名称。
+        expr: system_name
+        data_type: TEXT
+
+      - name: created_by
+        synonyms:
+          - "作成者"
+          - "登録者"
+          - "担当者"
+          - "作成した人"
+        description: このソースファイルを登録した担当者名。
+        expr: created_by
+        data_type: TEXT
+
+      - name: created_at
+        synonyms:
+          - "作成日"
+          - "登録日"
+          - "追加日"
+          - "作成日時"
+        description: このソースファイルが登録された日時。
+        expr: created_at
+        data_type: TIMESTAMP
+
+    metrics:
+      - name: src_file_count
+        synonyms:
+          - "ソースファイル数"
+          - "プログラム数"
+          - "SQLファイル数"
+          - "ファイル件数"
+        description: 条件に合致するソースファイルの数。
+        expr: COUNT(DISTINCT file_name)
+        data_type: NUMBER
+
 verified_queries:
   - name: "テーブル使用ジョブ一覧"
     question: "〇〇テーブルを使用しているジョブをすべて教えて"
@@ -309,3 +420,53 @@ verified_queries:
       FROM T_<システム名>_CRUD
       GROUP BY table_name_jp
       ORDER BY total_jobs DESC
+
+  # --- SRC テーブルを使うクエリ ---
+
+  - name: "モジュール別ソースファイル一覧"
+    question: "〇〇モジュールに含まれるソースファイルの一覧を教えて"
+    sql: |
+      SELECT file_name, function_name, ajs_name, created_by, created_at
+      FROM T_<システム名>_SRC
+      WHERE module_name = '〇〇モジュール'
+      ORDER BY function_name, file_name
+
+  - name: "担当者別ソースファイル数"
+    question: "担当者ごとのソースファイル数を教えて"
+    sql: |
+      SELECT created_by, COUNT(DISTINCT file_name) AS file_count
+      FROM T_<システム名>_SRC
+      GROUP BY created_by
+      ORDER BY file_count DESC
+
+  - name: "最近追加されたプログラム"
+    question: "最近追加されたプログラムを教えて"
+    sql: |
+      SELECT file_name, module_name, function_name, created_by, created_at
+      FROM T_<システム名>_SRC
+      ORDER BY created_at DESC
+      LIMIT 20
+
+  # --- 両テーブルをJOINするクエリ ---
+
+  - name: "テーブル更新ジョブのソースファイル"
+    question: "〇〇テーブルを更新しているジョブのソースファイル名を教えて"
+    sql: |
+      SELECT DISTINCT c.ajs_name, s.file_name, s.module_name, s.function_name
+      FROM T_<システム名>_CRUD c
+      LEFT JOIN T_<システム名>_SRC s ON c.ajs_name = s.ajs_name
+      WHERE c.table_name_jp = '〇〇テーブル'
+        AND c.crud_u_flag = 1
+      ORDER BY c.ajs_name
+
+  - name: "ジョブ使用テーブルとソースファイル"
+    question: "〇〇ジョブが使用しているテーブルとソースファイル名を教えて"
+    sql: |
+      SELECT DISTINCT
+          c.table_name_jp,
+          c.crud_c_flag, c.crud_r_flag, c.crud_u_flag, c.crud_d_flag,
+          s.file_name
+      FROM T_<システム名>_CRUD c
+      LEFT JOIN T_<システム名>_SRC s ON c.ajs_name = s.ajs_name
+      WHERE c.ajs_name = '〇〇ジョブ'
+      ORDER BY c.table_name_jp

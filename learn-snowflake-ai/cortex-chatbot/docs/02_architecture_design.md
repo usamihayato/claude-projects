@@ -3,11 +3,11 @@
 ## 1. 全体アーキテクチャ
 
 ```
-ユーザー（Streamlit チャット画面）
+ユーザー（Snowflake Intelligence UI ── エージェント選択して対話）
         │  自然言語の質問
         ▼
 ┌──────────────────────────────────────────────────────────┐
-│                  Cortex Agent                            │
+│             Cortex Agent（Intelligence上で構成）          │
 │                                                          │
 │  システムプロンプト:                                       │
 │  「影響調査質問 → analyst_tool を使用せよ」               │
@@ -24,23 +24,35 @@
 └────────────────────┼───────────────────────┼─────────────┘
                      │                       │
           ┌──────────▼──────────┐  ┌─────────▼──────────┐
-          │  T_システム名_CRUD  │  │  T_システム名_SRC  │
-          │  (構造化メタデータ) │  │  (ソースコード)    │
-          │  ・ジョブ名         │  │  ・ソースコード本文│
-          │  ・テーブル名       │  │  ・ai_summary      │
-          │  ・CRUDフラグ       │  │  ・モジュール名    │
-          │  ・ソースファイル名 │  │  ・機能名          │
-          └─────────────────────┘  └────────────────────┘
+          │   セマンティック    │  │    インデックス     │
+          │   モデル（YAML）    │  │    用ビュー（SQL）  │
+          └──────┬──────────────┘  └──────────┬──────────┘
+                 │                             │
+     ┌───────────┴──────────┐       ┌──────────▼──────────┐
+     │  T_システム名_CRUD   │       │  T_システム名_SRC   │
+     │  ・ジョブ名           │       │  ・ai_summary       │
+     │  ・テーブル名         │       │  ・source_code      │
+     │  ・CRUDフラグ         │       │  （非構造化テキスト）│
+     │  ・ソースファイル名   │       └─────────────────────┘
+     └──────────────────────┘
+     　T_システム名_SRC（構造化部分）もAnalyst対象に追加
+     　・file_name / module_name / function_name
+     　・created_at / created_by（棚卸し・メタ集計用）
 ```
 
 ---
 
 ## 2. テーブル別ツールマッピング
 
-| テーブル | 適用ツール | 理由 |
-|---|---|---|
-| T_システム名_CRUD | **Cortex Analyst** | フラグ・名称等の構造化データ。完全一致・フィルタ条件が必要な影響調査に最適 |
-| T_システム名_SRC | **Cortex Search** | ソースコード・ai_summaryの非構造化テキスト。セマンティック類似検索が有効 |
+| テーブル | カラム種別 | 適用ツール | 理由 |
+|---|---|---|---|
+| T_システム名_CRUD | 全カラム（構造化） | **Cortex Analyst** | CRUDフラグ・テーブル名・ジョブ名等。完全一致・フィルタ条件が必要な影響調査に最適 |
+| T_システム名_SRC | 構造化カラム（file_name, module_name, function_name, ajs_name, created_at, created_by 等） | **Cortex Analyst** | ファイル棚卸し・作成者別集計・モジュール別件数など、メタデータ集計クエリに対応 |
+| T_システム名_SRC | 非構造化カラム（source_code, ai_summary） | **Cortex Search** | ソースコード・概要テキストへのセマンティック類似検索。処理内容説明・障害調査に有効 |
+
+> **補足**: CRUDテーブルだけでなくSRCテーブルの構造化部分もAnalystに含めることで、
+> 「〇〇テーブルを更新しているジョブのソースファイル名は？」のような
+> 両テーブルをJOINする複合クエリにも対応できる。
 
 ---
 
@@ -75,17 +87,20 @@
 
 ## 4. Cortex Analyst セマンティックモデル設計
 
-### 対象テーブル: T_システム名_CRUD
+> **セマンティックモデル（YAML）はCortex Analyst専用の定義ファイル**です。
+> Cortex Searchとは無関係です（Searchは後述の「インデックス用ビュー」を使います）。
+
+### 対象テーブル: T_システム名_CRUD ＋ T_システム名_SRC（構造化部分）
 
 ```yaml
 # 設計ポイント
-# ・論理名（日本語）と物理カラム名の対応を明示
+# ・2テーブルをセマンティックモデルに登録し、JOIN CLUEを定義する
 # ・CRUDフラグはフィルタ条件として使われるため
 #   ビジネス用語（「使用している」「更新している」）とのマッピングが重要
 # ・verified_queries で頻出パターンを事前登録し精度を安定化
 ```
 
-**主要エンティティ**:
+### T_システム名_CRUD の主要エンティティ
 
 | ビジネス概念 | 物理カラム | 補足 |
 |---|---|---|
@@ -103,6 +118,36 @@
 | ファイル取り込み | `file_i_flg` | 1=インポートあり |
 | ファイル出力 | `file_o_flg` | 1=ファイル出力あり |
 
+### T_システム名_SRC の構造化カラム（Analyst対象）
+
+| ビジネス概念 | 物理カラム | 補足 |
+|---|---|---|
+| ソースファイル名 | `file_name` | 実ファイル名（CRUD側のsrc_nameと対応） |
+| モジュール | `module_name` | CRUD側と共通 |
+| 機能 | `function_name` | CRUD側と共通 |
+| ジョブ | `ajs_name` | 結合キー（CRUD側と共通） |
+| 作成日 | `created_at` | 棚卸し・最新追加プログラム検索 |
+| 作成者 | `created_by` | 担当者別集計 |
+
+> `source_code` / `ai_summary` はCortex Searchが担当するため、Analystのモデルには含めない。
+
+### テーブル間の結合定義（relationships）
+
+```yaml
+relationships:
+  - name: crud_to_src
+    left_table: T_<システム名>_CRUD
+    right_table: T_<システム名>_SRC
+    relationship_columns:
+      - left_column: ajs_name
+        right_column: ajs_name
+    join_type: left_outer
+    relationship_type: many_to_many
+```
+
+これにより「〇〇テーブルを更新しているジョブのソースファイル名は？」のような
+**両テーブルをまたぐ複合クエリ**が1回のAnalystコールで解決できる。
+
 **重要な言語マッピング（synonyms定義）**:
 
 | ユーザーの表現 | 解釈すべきSQLフィルタ |
@@ -119,22 +164,24 @@
 
 ## 5. Cortex Search サービス設計
 
-### 対象テーブル: T_システム名_SRC
+### 対象テーブル: T_システム名_SRC（非構造化カラムのみ）
 
 | 設計項目 | 設定値 | 理由 |
 |---|---|---|
 | 主検索カラム | `ai_summary` | 事前生成の概要文、長すぎず精度高い |
-| 補助カラム | `module_name`, `function_name`, `file_name` | フィルタとしてメタデータを活用 |
-| ソースコード | `source_code`（属性として保持） | 検索対象ではなく回答生成に利用 |
+| フィルタ属性 | `module_name`, `function_name`, `file_name` | 絞り込み条件として活用（検索対象ではない） |
+| ソースコード | `source_code`（応答生成用に保持） | 検索インデックスには使わず、引用表示に利用 |
 | チャンク戦略 | ai_summaryは1レコード1チャンク | すでに要約済みのため分割不要 |
 | 更新戦略 | `TARGET_LAG = '1 day'` | 日次バッチ後に再インデックス |
 
-### セマンティックビュー設計
+### インデックス用ビュー定義（Cortex Search用）
 
-Cortex Searchのインデックス対象として最適化したViewを作成:
+> **注意**: これはCortex Searchのインデックス対象を定義する通常のSQLビューです。
+> Cortex Analystの「セマンティックモデル（YAML）」とは別物です。
 
 ```sql
-CREATE OR REPLACE VIEW V_SRC_SEARCH AS
+-- Cortex Search Service の CREATE 文で直接使用するSELECTクエリ
+-- （別途Viewを作る場合はこの内容をVIEWとして定義する）
 SELECT
     source_id,
     file_name,
@@ -143,59 +190,60 @@ SELECT
     ajs_name,
     net_name,
     system_name,
-    -- 検索精度向上のため概要+モジュール名+機能名を結合
+    -- 検索精度向上のためai_summaryにメタ情報を付加
     ai_summary
-        || ' モジュール: ' || COALESCE(module_name, '')
-        || ' 機能: ' || COALESCE(function_name, '')
-        || ' ファイル: ' || file_name AS search_content,
+        || ' モジュール名: ' || COALESCE(module_name, '')
+        || ' 機能名: ' || COALESCE(function_name, '')
+        || ' ファイル名: ' || COALESCE(file_name, '')
+        AS search_content,  -- ← Cortex Searchがインデックスするカラム
     source_code,
     created_at
-FROM T_システム名_SRC
-WHERE ai_summary IS NOT NULL;
+FROM T_<システム名>_SRC
+WHERE ai_summary IS NOT NULL
 ```
 
 ---
 
-## 6. エージェント設計
+## 6. エージェント設計（Snowflake Intelligence）
 
-### ツール登録
+> **UIはStreamlitアプリではなく、Snowflake Intelligence を使用します。**
+> Intelligenceはエージェントを登録するだけで、チャットUIが自動的に提供されます。
+
+### Intelligence エージェント構成
 
 ```
-Tool 1: impact_analysis_tool (cortex_analyst_text_to_sql)
-  - セマンティックモデル: @<stage>/semantic_model.yaml
-  - 用途: 影響調査・CRUD棚卸し
+エージェント名: 社内システム保守支援Bot
 
-Tool 2: source_code_search_tool (cortex_search_service)
-  - サービス名: SRC_SEARCH_SERVICE
-  - 用途: ソースコード解説・障害調査
+ツール登録:
+  Tool 1: impact_analysis_tool (cortex_analyst_text_to_sql)
+    - セマンティックモデル: @<stage>/semantic_model.yaml
+    - 対象テーブル: T_CRUD（全体） + T_SRC（構造化カラム）
+    - 用途: 影響調査・CRUD棚卸し・ファイル棚卸し
+
+  Tool 2: source_code_search_tool (cortex_search_service)
+    - サービス名: SRC_SEARCH_SERVICE
+    - 対象: T_SRC の ai_summary（インデックス済み）
+    - 用途: ソースコード解説・障害調査
+
+システムプロンプト: 03_orchestration_design.md 参照
 ```
 
 ### モデル選択
 
 | 用途 | 推奨モデル | 理由 |
 |---|---|---|
-| エージェント基盤 | `claude-3-5-sonnet` または `mistral-large2` | ツール選択の精度と多言語（日本語）対応 |
+| エージェント基盤 | `claude-3-5-sonnet` | ツール選択の精度と日本語対応 |
 | Cortex Analyst内部 | 自動選択（Snowflake管理） | Analyst API内部で最適化済み |
 
----
-
-## 7. Semantic View 設計（Cortex Search 用）
-
-Cortex Search Serviceを作成する際のビュー定義:
+### Intelligence セットアップの流れ
 
 ```
-目的: T_システム名_SRCのai_summaryを中心にした検索最適化ビュー
-
-フィルタに使えるカラム:
-- module_name: モジュール絞り込み
-- function_name: 機能絞り込み
-- ajs_name: ジョブ名絞り込み
-- system_name: システム絞り込み（マルチシステム対応時）
-
-検索対象テキスト:
-- search_content (ai_summary + module_name + function_name の結合)
-
-応答生成に使う追加カラム:
-- source_code: 実際のソースコード（引用表示用）
-- file_name: ソースファイル名
+1. Snowsight の「Intelligence」タブを開く
+2. 「+ New Agent」でエージェントを作成する
+3. ツールとして「Cortex Analyst」と「Cortex Search」を追加する
+4. セマンティックモデルのYAMLとSearchサービス名を指定する
+5. システムプロンプトを設定する
+6. エージェントを「公開」するとチームメンバーが利用可能になる
 ```
+
+詳細は `sql/05_intelligence_agent_config.md` を参照。
