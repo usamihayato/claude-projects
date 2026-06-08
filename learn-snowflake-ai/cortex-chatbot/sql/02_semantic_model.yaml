@@ -240,14 +240,18 @@ tables:
         data_type: NUMBER
 
   # ============================================================
-  # T_<システム名>_SRC テーブル（構造化カラムのみ Analyst 対象）
-  # source_code / ai_summary は Cortex Search が担当するため含めない
+  # T_<システム名>_SRC テーブル
+  # ・構造化カラム + source_code を Analyst 対象とする
+  # ・source_code: LIKE部分一致による技術キーワード検索（関数名・プロシージャ名等）
+  # ・ai_summary: 意味的検索が必要なため Cortex Search が担当（このモデルには含めない）
   # ============================================================
   - name: T_<システム名>_SRC
     description: >
       ソースコードモジュールのメタ情報テーブル。
-      ファイル名・モジュール名・機能名・作成者・作成日などの構造化情報を持つ。
-      ソースコード本文(source_code)とAI概要(ai_summary)はCortex Searchが管理するため
+      ファイル名・モジュール名・機能名・作成者・作成日などの構造化情報と、
+      source_code（コード本文）を持つ。
+      source_codeはLIKEによる技術キーワード検索に使用する。
+      ai_summary（AI概要テキスト）は意味的検索が必要なためCortex Searchが担当し
       このモデルには含めない。
     base_table: <DB_NAME>.<SCHEMA_NAME>.T_<システム名>_SRC
     filters: []
@@ -325,6 +329,21 @@ tables:
         description: このソースファイルが登録された日時。
         expr: created_at
         data_type: TIMESTAMP
+
+      - name: source_code
+        synonyms:
+          - "ソースコード"
+          - "コード"
+          - "プログラム本文"
+          - "SQLコード"
+          - "コード本文"
+        description: >
+          ソースコード・SQLファイルの本文テキスト。
+          LIKE演算子による技術キーワードの部分一致検索に使用する。
+          用途例: 「〇〇関数を使っているファイルは何件？」→ source_code LIKE '%func_name%'
+          ※ コード内容の意味的な説明・解説が目的の場合はCortex Searchを使うこと。
+        expr: source_code
+        data_type: TEXT
 
     metrics:
       - name: src_file_count
@@ -446,6 +465,40 @@ verified_queries:
       FROM T_<システム名>_SRC
       ORDER BY created_at DESC
       LIMIT 20
+
+  # --- source_code LIKE検索クエリ ---
+
+  - name: "特定関数を使っているファイル件数"
+    question: "〇〇関数を利用しているソースコードは何件ある？"
+    sql: |
+      SELECT COUNT(DISTINCT file_name) AS file_count
+      FROM T_<システム名>_SRC
+      WHERE source_code LIKE '%〇〇関数名%'
+
+  - name: "特定関数を使っているファイル一覧"
+    question: "〇〇関数を使っているプログラムのファイル一覧を教えて"
+    sql: |
+      SELECT file_name, module_name, function_name, ajs_name
+      FROM T_<システム名>_SRC
+      WHERE source_code LIKE '%〇〇関数名%'
+      ORDER BY module_name, file_name
+
+  - name: "特定キーワードを含むファイル数（モジュール別）"
+    question: "〇〇を使っているプログラムをモジュール別に集計して"
+    sql: |
+      SELECT module_name, COUNT(DISTINCT file_name) AS file_count
+      FROM T_<システム名>_SRC
+      WHERE source_code LIKE '%〇〇キーワード%'
+      GROUP BY module_name
+      ORDER BY file_count DESC
+
+  - name: "特定テーブルをSQLで直接参照しているファイル"
+    question: "〇〇テーブルをコード内でSQLとして参照しているプログラムは？"
+    sql: |
+      SELECT file_name, module_name, function_name, ajs_name
+      FROM T_<システム名>_SRC
+      WHERE source_code LIKE '%〇〇テーブル名%'
+      ORDER BY module_name, file_name
 
   # --- 両テーブルをJOINするクエリ ---
 
