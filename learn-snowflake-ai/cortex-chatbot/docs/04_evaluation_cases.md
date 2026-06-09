@@ -264,40 +264,55 @@ CREATE OR REPLACE TABLE T_EVAL_RESULTS (
 );
 ```
 
-### Step 2: 難易度別に実行する
+### Step 2: 難易度別に自動実行する
 
-```python
-# 難易度レベルごとに順番に実行する
-for level in [1, 2, 3]:
-    level_cases = [c for c in test_cases if c["difficulty_level"] == level]
-    
-    print(f"=== L{level} 評価開始 ({len(level_cases)}件) ===")
-    for case in level_cases:
-        start = time.time()
-        response = call_agent(case["question"])
-        elapsed = time.time() - start
-        
-        insert_eval_result(
-            test_case_id=case["id"],
-            difficulty_level=level,
-            answer=response["text"],
-            used_tool=response["tool_used"],
-            response_sec=elapsed
-        )
-    
-    # 合格基準チェック
-    score = calc_level_score(level)
-    if not meets_criteria(level, score):
-        print(f"L{level} 不合格 → セマンティックモデルを見直してください")
-        break
-    print(f"L{level} 合格 → L{level+1}へ進みます")
+実行可能なスクリプトは `scripts/evaluate_agent.py` を参照。
+
+```bash
+# 環境変数を設定
+export SF_ACCOUNT=xxx.ap-northeast-1.aws
+export SF_USER=your_user
+export SF_PASSWORD=your_password
+export SF_DATABASE=YOUR_DB
+export SF_SCHEMA=YOUR_SCHEMA
+export SF_WAREHOUSE=YOUR_WH
+
+# L1から順番に実行（hybrid）
+python scripts/evaluate_agent.py --tool_type hybrid
+
+# 比較用: Search only で同じテストケースを実行
+python scripts/evaluate_agent.py --tool_type search_only
+
+# L2から再開したい場合
+python scripts/evaluate_agent.py --tool_type hybrid --level 2
 ```
 
-### Step 3: 人手評価
+**スクリプトの動作**:
+1. `TEST_CASES` リストから指定レベルのケースを取得し、`SP_CHATBOT_AGENT` を順次呼び出す
+2. 各ケースの回答・使用ツール・応答時間を `T_EVAL_RESULTS` にINSERT
+3. レベル終了後に集計して合格基準と比較し、不合格なら停止・次レベルに進まない
+4. C/D/Eカテゴリの `relevance_score` は人手評価後にUPDATEして再集計する（後述）
 
-- カテゴリC・D・Eの関連性スコアは評価者2名が独立評価
+### Step 3: 人手評価（C・D・Eカテゴリ）
+
+- 評価者2名が `T_EVAL_RESULTS` の `answer` カラムを確認し、5点満点でスコアをつける
 - スコア差が2点以上の場合は協議して確定
-- 影響調査（A・B）は自動判定（期待回答との完全一致チェック）
+- スコアが決まったら以下のSQLで更新する
+
+```sql
+-- 人手評価スコアをUPDATEする
+UPDATE T_EVAL_RESULTS
+SET relevance_score = <スコア値>  -- 1〜5
+WHERE eval_id = <eval_id>;        -- T_EVAL_RESULTSのevalIdを指定
+
+-- まとめてUPDATEする場合（Excelで集計してValuesで流し込む例）
+UPDATE T_EVAL_RESULTS SET relevance_score = 4 WHERE eval_id = 10;
+UPDATE T_EVAL_RESULTS SET relevance_score = 5 WHERE eval_id = 11;
+-- ...
+```
+
+- UPDATE後にスクリプトの `--level` オプションで当該レベルを再集計して合格判定できる
+- 影響調査（A・B）は `expected` カラムに正解リストを設定すれば自動判定される
 
 ### Step 4: 難易度別集計
 
