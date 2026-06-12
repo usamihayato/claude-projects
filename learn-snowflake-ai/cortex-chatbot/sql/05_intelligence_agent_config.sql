@@ -1,5 +1,5 @@
 -- ============================================================
--- Snowflake Intelligence エージェント設定ガイド
+-- Snowflake Intelligence エージェント設定ガイド（3ツール構成）
 -- ============================================================
 -- Snowflake Intelligence はSnowsightに統合されたエージェントチャットUI。
 -- エージェントを登録するだけでチャット画面が自動的に提供される（カスタムUI不要）。
@@ -7,30 +7,28 @@
 -- 前提:
 --   - 01_setup.sql でステージ・評価テーブルを作成済み
 --   - 02_semantic_model.yaml をステージにアップロード済み
---   - 03_cortex_search_setup.sql で SRC_SEARCH_SERVICE を作成済み
+--   - 03_cortex_search_setup.sql で AI_SUMMARY_SEARCH_SERVICE と
+--     SOURCE_CODE_SEARCH_SERVICE を作成済み
 -- ============================================================
 
 -- ============================================================
 -- Step 1. セマンティックモデルをステージにアップロード
 -- ============================================================
--- SnowSQL または Snowsight の「Files」からアップロードする。
 -- SnowSQL の場合:
 --   PUT file:///path/to/02_semantic_model.yaml @CHATBOT_MODELS_STAGE AUTO_COMPRESS=FALSE;
 
--- アップロード確認
 LIST @CHATBOT_MODELS_STAGE;
 
 -- ============================================================
--- Step 2. Cortex Search Service の確認
+-- Step 2. Cortex Search Services の確認
 -- ============================================================
 
-SHOW CORTEX SEARCH SERVICES LIKE 'SRC_SEARCH_SERVICE';
+SHOW CORTEX SEARCH SERVICES LIKE 'AI_SUMMARY_SEARCH_SERVICE';
+SHOW CORTEX SEARCH SERVICES LIKE 'SOURCE_CODE_SEARCH_SERVICE';
 
 -- ============================================================
--- Step 3. Snowflake Intelligence エージェントの作成
+-- Step 3. Snowflake Intelligence エージェントの作成（SQL API）
 -- ============================================================
--- Snowsight では UIからエージェントを作成できる。
--- 以下は SQL API による作成コマンド（プレビュー機能のため構文は変わる可能性あり）。
 -- UIでの手順は Step 4 を参照。
 
 CREATE OR REPLACE CORTEX AGENT "社内システム保守支援Bot"
@@ -38,52 +36,78 @@ CREATE OR REPLACE CORTEX AGENT "社内システム保守支援Bot"
     TOOLS = (
         CORTEX_ANALYST_TOOL(
             SEMANTIC_MODEL = '@CHATBOT_MODELS_STAGE/02_semantic_model.yaml',
-            NAME = 'impact_analysis_tool'
+            NAME = 'impact_analysis_tool',
+            DESCRIPTION = '社内システムのメタデータ（ジョブ・テーブル・CRUDフラグ・ソースコードキーワード）に対してSQL検索を行う。テーブル名・ジョブ名・フラグ値が起点の構造検索・集計・棚卸しに使用する。'
         ),
         CORTEX_SEARCH_TOOL(
-            SERVICE = 'SRC_SEARCH_SERVICE',
-            NAME = 'source_code_search_tool'
+            SERVICE = 'AI_SUMMARY_SEARCH_SERVICE',
+            NAME = 'ai_summary_search_tool',
+            DESCRIPTION = 'プログラムのAI生成概要文をセマンティック検索する。処理の目的・フロー・概要を知りたい場合、障害調査、エラー原因調査に使用する。質問の起点がファイル名・処理内容・エラー文の場合に使用する。'
+        ),
+        CORTEX_SEARCH_TOOL(
+            SERVICE = 'SOURCE_CODE_SEARCH_SERVICE',
+            NAME = 'source_code_search_tool',
+            DESCRIPTION = 'ソースコード本文（SQL・バッチスクリプト）をセマンティック検索する。カラム処理の追跡・変数マッピング・詳細な実装ロジック解析に使用する。ファイルのカラム変更影響や処理ロジックを直接コードから読む必要がある場合に使用する。'
         )
     )
     SYSTEM_PROMPT = $$
 あなたは社内システムの保守・調査を支援するアシスタントです。
-以下の2つのツールを使用できます。
+以下の3つのツールを使用できます。
 
 【ツール選択ルール】
 
-1. impact_analysis_tool（影響調査・CRUD棚卸し・ファイル棚卸し）:
-   以下の質問には必ずこのツールを使用してください。
+1. impact_analysis_tool (Cortex Analyst):
+   テーブル名・ジョブ名・CRUDフラグ・コード内キーワードが起点の構造検索・集計が必要な場合に使用してください。
    - 「〇〇テーブルを使用/参照/更新/削除しているジョブ・プログラムを教えて」
    - 「〇〇ジョブが使っているテーブル一覧を教えて」
    - 「〇〇テーブルへのCRUD操作の一覧を教えて」
    - 「ファイル出力/取り込みが発生する機能は？」
    - 「〇〇ジョブネットに含まれるジョブは？」
-   - 「〇〇モジュールのソースファイル一覧は？」
-   - 「〇〇さんが作成したプログラムは？」
-   - 「最近追加されたプログラムは？」
-   - テーブル名・ジョブ名・CRUDフラグに基づく構造的な検索や集計
+   - 「〇〇関数を利用しているソースコードは何件ある？」（コード内キーワード件数）
+   - 「〇〇関数を使っているプログラムのファイル一覧を教えて」（コード内キーワード一覧）
+   - テーブル名・ジョブ名・フラグ・コード内キーワードに基づく絞り込みや集計の質問
 
-2. source_code_search_tool（ソースコード解説・障害調査）:
-   以下の質問には必ずこのツールを使用してください。
+2. ai_summary_search_tool (Cortex Search - AI概要文):
+   プログラムの目的・処理フロー・概要を知りたい場合に使用してください。
    - 「〇〇.sqlはどんな処理をするプログラムですか？」
    - 「〇〇モジュールの処理内容を教えて」
    - 「このエラーが出た場合の原因と対処法は？」
    - 「〇〇機能の処理フローを解説して」
    - 「〇〇バッチが異常終了した場合の調査ポイントは？」
-   - ソースコードの内容・意図・処理ロジックに関する質問
+   - ソースコードの概要・意図・処理目的に関する質問
 
-3. 複合質問（両ツールを使用）:
-   例:「〇〇テーブルを更新しているジョブのソースコードを説明して」
-   → まずimpact_analysis_toolでジョブとソースファイル名を特定し、
-     次にsource_code_search_toolでそのファイルのコードを解説
+3. source_code_search_tool (Cortex Search - ソースコード本文):
+   コードを直接読んで詳細な実装ロジック・変数・テーブルを追う必要がある場合に使用してください。
+   - 「〇〇ファイルのカラム変更で影響するプログラムと書き込み先テーブルは？」
+   - 「〇〇ファイルで〇〇カラムを処理しているプログラムは？」
+   - 「〇〇関数を使っているプログラムはどんな処理をしているか？」（処理内容の詳細が目的）
+   - ソースコードの実装詳細・変数マッピング・カラム処理ロジックに関する質問
+
+4. 両ツール使用（Analyst → ai_summary_search）:
+   構造検索でジョブを特定した後にコード概要を説明する場合に使用。
+   - 「〇〇テーブルを更新しているジョブのソースコードを説明して」
+     → まずimpact_analysis_toolで該当ジョブを特定し、
+       次にai_summary_search_toolでそのジョブのコード概要を説明
+
+5. 両ツール使用（source_code_search → Analyst）:
+   ソースコードの推論で影響テーブルを特定した後に下流ジョブを展開する場合に使用。
+   - 「〇〇ファイルのカラム変更で改修・テストが必要な機能を教えて」
+     → まずsource_code_search_toolでソースコードを読みカラム処理→変数名→書き込み先テーブルを推論し、
+       次にimpact_analysis_toolで特定したテーブルを使う下流ジョブを展開
+
+【ツール順序の判断基準】
+- テーブル名・ジョブ名・フラグ値が起点 → Analyst から始める
+- 処理の概要・目的・フローが知りたい → ai_summary_search_tool
+- コードの詳細ロジック・変数・カラム追跡が必要 → source_code_search_tool から始める
+- 2つ目のツールが必要かは1つ目の結果を見てから判断する
 
 【回答ルール】
 - 必ず日本語で回答してください
-- impact_analysis_toolが生成したSQLも回答に含めてください
+- impact_analysis_toolが生成したSQLを回答に含めてください
 - ソースコードを引用する場合は、ファイル名・モジュール名を明記してください
-- データに存在しない情報は「データに存在しません」と明確に伝えてください
+- 確認できなかった情報は「データに存在しません」と明確に伝えてください
 $$
-    COMMENT = '社内システム保守支援チャットボット: Cortex Analyst（影響調査）+ Cortex Search（ソースコード解説）';
+    COMMENT = '社内システム保守支援チャットボット: Cortex Analyst（影響調査）+ Cortex Search x2（概要検索・コード詳細検索）';
 
 -- ============================================================
 -- Step 4. Snowsight UI からの設定手順
@@ -99,36 +123,44 @@ $$
 --    説明: ジョブ影響調査とソースコード解説を支援するチャットボット
 --    モデル: claude-3-5-sonnet（または利用可能な最新モデル）
 --
--- 5. 「Add Tool」で2つのツールを追加:
+-- 5. 「Add Tool」で3つのツールを追加:
 --
 --    Tool 1: Cortex Analyst
 --      - 名前: impact_analysis_tool
+--      - 説明: 社内システムのメタデータ（ジョブ・テーブル・CRUDフラグ・ソースコードキーワード）に対してSQL検索を行う。テーブル名・ジョブ名・フラグ値が起点の構造検索・集計・棚卸しに使用する。
 --      - Semantic Model: @CHATBOT_MODELS_STAGE/02_semantic_model.yaml を選択
 --
---    Tool 2: Cortex Search
+--    Tool 2: Cortex Search（AI概要文）
+--      - 名前: ai_summary_search_tool
+--      - 説明: プログラムのAI生成概要文をセマンティック検索する。処理の目的・フロー・概要を知りたい場合、障害調査、エラー原因調査に使用する。質問の起点がファイル名・処理内容・エラー文の場合に使用する。
+--      - Search Service: AI_SUMMARY_SEARCH_SERVICE を選択
+--
+--    Tool 3: Cortex Search（ソースコード本文）
 --      - 名前: source_code_search_tool
---      - Search Service: SRC_SEARCH_SERVICE を選択
+--      - 説明: ソースコード本文（SQL・バッチスクリプト）をセマンティック検索する。カラム処理の追跡・変数マッピング・詳細な実装ロジック解析に使用する。ファイルのカラム変更影響や処理ロジックを直接コードから読む必要がある場合に使用する。
+--      - Search Service: SOURCE_CODE_SEARCH_SERVICE を選択
 --
 -- 6. System Prompt に上記の内容を貼り付ける
 -- 7. 「Publish」でエージェントを公開する
---
--- 公開後、チームメンバーは Snowsight > Intelligence から
--- このエージェントを選択してすぐに利用開始できる。
 
 -- ============================================================
 -- Step 5. 動作確認
 -- ============================================================
 
--- Intelligence UI で以下の質問を試してツールが正しく使われるか確認する:
-
--- 【影響調査 → impact_analysis_tool が使われるはず】
+-- 【パターンA: Analyst のみ】
 -- 「受注テーブルを更新しているジョブを教えてください」
--- 「ファイル出力が発生する機能はどれですか？」
--- 「受注処理モジュールのソースファイル一覧を教えて」
+-- 「〇〇関数を使っているプログラムは何件ありますか？」
 
--- 【ソースコード解説 → source_code_search_tool が使われるはず】
+-- 【パターンB1: ai_summary_search のみ】
 -- 「JOB_ORDER_001.sqlはどんな処理をしていますか？」
 -- 「受注バッチが異常終了した場合の調査ポイントは？」
 
--- 【複合質問 → 両ツールが順番に使われるはず】
+-- 【パターンB2: source_code_search のみ】
+-- 「〇〇.datファイルの6カラム目を処理しているプログラムを教えて」
+-- 「受注金額をINSERTしているプログラムのロジックを詳しく教えて」
+
+-- 【パターンC: Analyst → ai_summary_search】
 -- 「受注テーブルを更新しているジョブのソースコードを解説してください」
+
+-- 【パターンD: source_code_search → Analyst】
+-- 「〇〇.datファイルの6カラム目の桁数変更で影響する機能を教えて」

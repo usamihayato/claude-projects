@@ -68,10 +68,19 @@ def run(session, p_question: str, p_conv_history):
             {
                 "tool_spec": {
                     "type": "cortex_search_service",
+                    "name": "ai_summary_search_tool"
+                },
+                "tool_resources": {
+                    "cortex_search_service": f"{session.get_current_database()}.{session.get_current_schema()}.AI_SUMMARY_SEARCH_SERVICE"
+                }
+            },
+            {
+                "tool_spec": {
+                    "type": "cortex_search_service",
                     "name": "source_code_search_tool"
                 },
                 "tool_resources": {
-                    "cortex_search_service": f"{session.get_current_database()}.{session.get_current_schema()}.SRC_SEARCH_SERVICE"
+                    "cortex_search_service": f"{session.get_current_database()}.{session.get_current_schema()}.SOURCE_CODE_SEARCH_SERVICE"
                 }
             }
         ],

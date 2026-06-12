@@ -49,11 +49,13 @@
 | T_システム名_CRUD | 全カラム（構造化） | **Cortex Analyst** | CRUDフラグ・テーブル名・ジョブ名等。完全一致・フィルタ条件が必要な影響調査に最適 |
 | T_システム名_SRC | 構造化カラム（file_name, module_name, function_name, ajs_name, created_at, created_by 等） | **Cortex Analyst** | ファイル棚卸し・作成者別集計・モジュール別件数など、メタデータ集計クエリに対応 |
 | T_システム名_SRC | `source_code`（コード本文） | **Cortex Analyst**（LIKE検索） | 「〇〇関数を使っているファイルは何件？」のような特定キーワードの部分一致 + 集計クエリ |
-| T_システム名_SRC | `ai_summary`（AI概要テキスト） | **Cortex Search** | 自然言語の意味的検索。処理内容説明・障害調査・概念的な問いに対応 |
+| T_システム名_SRC | `ai_summary`（AI概要テキスト） | **Cortex Search**（AI_SUMMARY_SEARCH_SERVICE） | 自然言語の意味的検索。処理概要・障害調査・機能フロー説明に対応 |
+| T_システム名_SRC | `source_code`（コード本文） | **Cortex Search**（SOURCE_CODE_SEARCH_SERVICE） | コード本文のセマンティック検索。カラム処理追跡・変数マッピング・詳細ロジック解析に対応 |
 
-> **source_code の分担ルール**:
-> - 「〇〇関数を**使っているファイルは何件？どのファイル？**」→ Analyst（LIKE + COUNT/SELECT。集計・特定が目的）
-> - 「〇〇を使っているプログラムは**どんな処理をしているか**？」→ Search（意味理解・説明が目的）
+> **source_code の分担ルール（Analyst vs Search）**:
+> - 「〇〇関数を**使っているファイルは何件？どのファイル？**」→ **Analyst**（LIKE + COUNT/SELECT。件数・一覧の集計が目的）
+> - 「〇〇ファイルの**カラム変更で影響するプログラム**は？」→ **source_code_search**（コードを読んでカラム→変数→テーブルを追う詳細推論が目的）
+> - 「〇〇プログラムは**どんな処理をしているか**？」→ **ai_summary_search**（概要・目的の説明が目的）
 >
 > ai_summaryはLIKE検索に不向き（要約時に関数名が省略される場合がある）。
 > 技術キーワードの精密マッチには source_code が信頼性が高い。
@@ -79,7 +81,7 @@
 **特徴①（メタデータ）**: テーブル名・ジョブ名・フラグ値など、完全一致で特定できる構造的な検索
 **特徴②（コード内検索）**: 特定の関数名・テーブル名・キーワードをコード本文からLIKE部分一致で集計・特定する検索。**「何件あるか」「どのファイルか」が知りたい場合はAnalyst**
 
-### Cortex Search を使うべき質問（解説・概念的な問い・障害調査）
+### ai_summary_search_tool を使うべき質問（概要・処理フロー・障害調査）
 
 ```
 「〇〇.sqlはどんな処理をしているプログラム？」
@@ -87,10 +89,20 @@
 「このエラーメッセージが出た場合の原因は？」
 「〇〇機能の処理内容を新人向けに解説して」
 「〇〇バッチが異常終了した場合の調査ポイントは？」
-「〇〇関数を使っているプログラムはどんな処理をしているか？」  ← 件数でなく内容が目的
 ```
 
-**特徴**: 処理内容・意図・文脈を把握するための意味的な検索。「なぜ」「どのように」という問いに対応。
+**特徴**: AI生成の概要文（ai_summary）を自然言語で検索。プログラムの目的・処理全体像・障害原因調査に対応。
+
+### source_code_search_tool を使うべき質問（詳細ロジック・カラム追跡・変数マッピング）
+
+```
+「〇〇.datファイルの6カラム目を処理しているプログラムは？」
+「〇〇ファイルのカラム変更で影響するプログラムと書き込み先テーブルは？」
+「〇〇関数を使っているプログラムはどんな処理をしているか？」  ← 実装詳細が目的
+「〇〇変数に何をセットしているか？」
+```
+
+**特徴**: コード本文（source_code）を直接セマンティック検索。LLMがコードを読んでカラム→変数→テーブルの多段推論が可能。
 
 ---
 
@@ -171,44 +183,50 @@ relationships:
 
 ---
 
-## 5. Cortex Search サービス設計
+## 5. Cortex Search サービス設計（2サービス構成）
 
-### 対象テーブル: T_システム名_SRC（非構造化カラムのみ）
+> Cortex Search は `ON <column>` で指定した1カラムのみをインデックスする。
+> ai_summary と source_code は性質が異なるため、2サービスに分離して最適化する。
 
-| 設計項目 | 設定値 | 理由 |
+### サービス比較
+
+| 設計項目 | AI_SUMMARY_SEARCH_SERVICE | SOURCE_CODE_SEARCH_SERVICE |
 |---|---|---|
-| 主検索カラム | `ai_summary` | 事前生成の概要文、長すぎず精度高い |
-| フィルタ属性 | `module_name`, `function_name`, `file_name` | 絞り込み条件として活用（検索対象ではない） |
-| ソースコード | `source_code`（応答生成用に保持） | 検索インデックスには使わず、引用表示に利用 |
-| チャンク戦略 | ai_summaryは1レコード1チャンク | すでに要約済みのため分割不要 |
-| 更新戦略 | `TARGET_LAG = '1 day'` | 日次バッチ後に再インデックス |
+| 主インデックスカラム（ON） | `search_content`（ai_summary + メタ情報結合） | `source_code`（コード本文） |
+| 用途 | 処理概要・障害調査・機能フロー説明 | カラム追跡・変数マッピング・詳細ロジック解析 |
+| チャンク戦略 | 1レコード1チャンク（要約済みなので短い） | Cortex Search の自動チャンク（コードは長文） |
+| フィルタ属性 | module_name, function_name, ajs_name, file_name | module_name, function_name, ajs_name, file_name |
+| レスポンスカラム | source_code（引用表示用） | ai_summary（コンテキスト補完用） |
+| インデックスサイズ | **小**（ai_summary は短い自然文） | **大**（source_code は長文コード） |
+| 固定費（アイドル税） | **低** | **高**（source_code が長いため） |
+| 更新戦略 | TARGET_LAG = '1 day' | TARGET_LAG = '1 day' |
 
-### インデックス用ビュー定義（Cortex Search用）
-
-> **注意**: これはCortex Searchのインデックス対象を定義する通常のSQLビューです。
-> Cortex Analystの「セマンティックモデル（YAML）」とは別物です。
+### AI_SUMMARY_SEARCH_SERVICE のソースクエリ
 
 ```sql
--- Cortex Search Service の CREATE 文で直接使用するSELECTクエリ
--- （別途Viewを作る場合はこの内容をVIEWとして定義する）
 SELECT
-    source_id,
-    file_name,
-    module_name,
-    function_name,
-    ajs_name,
-    net_name,
-    system_name,
+    source_id, file_name, module_name, function_name,
+    ajs_name, net_name, system_name, source_code, created_at,
     -- 検索精度向上のためai_summaryにメタ情報を付加
     ai_summary
         || ' モジュール名: ' || COALESCE(module_name, '')
         || ' 機能名: ' || COALESCE(function_name, '')
         || ' ファイル名: ' || COALESCE(file_name, '')
-        AS search_content,  -- ← Cortex Searchがインデックスするカラム
-    source_code,
-    created_at
+        || ' ジョブ名: ' || COALESCE(ajs_name, '')
+        AS search_content   -- ← Cortex Search がインデックスするカラム
 FROM T_<システム名>_SRC
 WHERE ai_summary IS NOT NULL
+```
+
+### SOURCE_CODE_SEARCH_SERVICE のソースクエリ
+
+```sql
+SELECT
+    source_id, file_name, module_name, function_name,
+    ajs_name, net_name, system_name, ai_summary, created_at,
+    source_code   -- ← Cortex Search がインデックスするカラム
+FROM T_<システム名>_SRC
+WHERE source_code IS NOT NULL
 ```
 
 ---
@@ -225,14 +243,19 @@ WHERE ai_summary IS NOT NULL
 
 ツール登録:
   Tool 1: impact_analysis_tool (cortex_analyst_text_to_sql)
-    - セマンティックモデル: @<stage>/semantic_model.yaml
-    - 対象テーブル: T_CRUD（全体） + T_SRC（構造化カラム）
-    - 用途: 影響調査・CRUD棚卸し・ファイル棚卸し
+    - セマンティックモデル: @CHATBOT_MODELS_STAGE/02_semantic_model.yaml
+    - 対象テーブル: T_CRUD（全体） + T_SRC（構造化カラム + source_code LIKE検索）
+    - 用途: 影響調査・CRUD棚卸し・コード内キーワード件数/一覧
 
-  Tool 2: source_code_search_tool (cortex_search_service)
-    - サービス名: SRC_SEARCH_SERVICE
+  Tool 2: ai_summary_search_tool (cortex_search_service)
+    - サービス名: AI_SUMMARY_SEARCH_SERVICE
     - 対象: T_SRC の ai_summary（インデックス済み）
-    - 用途: ソースコード解説・障害調査
+    - 用途: 処理概要説明・障害調査・機能フロー解説
+
+  Tool 3: source_code_search_tool (cortex_search_service)
+    - サービス名: SOURCE_CODE_SEARCH_SERVICE
+    - 対象: T_SRC の source_code（コード本文インデックス済み）
+    - 用途: カラム処理追跡・変数マッピング・詳細ロジック解析
 
 システムプロンプト: 03_orchestration_design.md 参照
 ```
@@ -249,8 +272,8 @@ WHERE ai_summary IS NOT NULL
 ```
 1. Snowsight の「Intelligence」タブを開く
 2. 「+ New Agent」でエージェントを作成する
-3. ツールとして「Cortex Analyst」と「Cortex Search」を追加する
-4. セマンティックモデルのYAMLとSearchサービス名を指定する
+3. ツールとして Cortex Analyst 1本 + Cortex Search 2本を追加する
+4. 各ツールにサービス名・ツール説明を指定する（05_intelligence_agent_config.sql 参照）
 5. システムプロンプトを設定する
 6. エージェントを「公開」するとチームメンバーが利用可能になる
 ```
