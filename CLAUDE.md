@@ -55,7 +55,12 @@ claude-projects/
         ├── 01-migration-targets/
         ├── 02-knockout-requirements/
         ├── 03-adms/
-        └── 04-cost-analysis/
+        ├── 04-cost-analysis/
+        ├── 05-network-design/
+        └── 06-migration-procedures/              ← 移行手順書（検証・本番）
+            ├── 01-verification-procedure.md      ← 自宅検証手順（BACPAC）
+            ├── 02-production-dms-procedure.md    ← 本番移行手順（Azure DMS・2TB）
+            └── fact-check.md                     ← 公式ドキュメントによるファクトチェック結果
 ```
 
 ---

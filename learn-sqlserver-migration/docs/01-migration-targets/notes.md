@@ -70,6 +70,40 @@ Azure への SQL Server 移行には大きく 3 つの移行先がある。
 
 ---
 
+### 2-4. Azure Synapse Analytics + Azure Data Lake Storage Gen2（アーカイブ・分析用途）
+
+> ⚠️ **OLTP の直接移行先ではありません**
+> 読み取り専用・蓄積系データのアーカイブや分析クエリを目的とした構成です。
+
+```
+オンプレ SQL Server 2008 R2（READ_ONLY 移行対象）
+        │
+        ↓ ADF / bcp でエクスポート → Parquet 変換
+Azure Data Lake Storage Gen2（安価なオブジェクトストレージ）
+        │
+        ↓ T-SQL で参照
+Azure Synapse Analytics Serverless SQL Pool（クエリのみ・コンピュートは使用時課金）
+```
+
+**主な特徴**:
+- ストレージは ADLS（Blob ベース）のため、Azure SQL Database の 1/6 以下のコスト
+- クエリ実行時のみ課金（Serverless SQL Pool: TB あたり課金）
+- SSMS から Synapse エンドポイントへ T-SQL で接続可能
+- INSERT / UPDATE / DELETE は不可（READ_ONLY 専用）
+
+**向いているケース**:
+- 本番移行後に READ_ONLY 化して参照だけ続ける蓄積系データ
+- データ量が 1TB 以上でストレージコストを最小化したい
+- BI ツール（Power BI 等）からの分析クエリが主な用途
+- OLTP アプリとの接続を切り離せる
+
+**向いていないケース**:
+- トランザクション処理・INSERT/UPDATE が残る
+- アプリ接続文字列を変更できない（エンドポイントが変わる）
+- ストアドプロシージャ・SQL Agent ジョブを移行したい
+
+---
+
 ## 3. 機能比較表
 
 | 機能 | SQL on VM | SQL MI | SQL Database |
@@ -90,6 +124,22 @@ Azure への SQL Server 移行には大きく 3 つの移行先がある。
 | OS レベルのアクセス | ✓ | ✗ | ✗ |
 | Windows Server EOL 脱却 | ✗ | **✓** | **✓** |
 | パッチ管理自動化 | ✗（自社管理） | ✓ | ✓ |
+
+---
+
+### OLTP 3択との機能比較（アーカイブ用途の観点）
+
+| 観点 | SQL on VM | SQL MI | SQL Database | **Synapse + ADLS** |
+|------|:---------:|:------:|:------------:|:------------------:|
+| OLTP（INSERT/UPDATE） | ✓ | ✓ | ✓ | **✗** |
+| READ クエリ（T-SQL） | ✓ | ✓ | ✓ | **✓**（一部制限あり） |
+| SQL Server Agent | ✓ | ✓ | ✗ | **✗** |
+| ストアドプロシージャ | ✓ | ✓ | ✓ | **△**（Serverless は制限あり） |
+| SSMS から接続 | ✓ | ✓ | ✓ | **✓**（別エンドポイント） |
+| Windows Server EOL 脱却 | ✗ | ✓ | ✓ | **✓** |
+| 大容量ストレージコスト | 高 | 高 | 高 | **非常に安い** |
+| 非クエリ時のコスト | 高 | 高 | 低（自動停止） | **ほぼゼロ** |
+| Power BI 連携 | ✓ | ✓ | ✓ | **◎（ネイティブ統合）** |
 
 ---
 
@@ -117,13 +167,26 @@ Q1: xp_cmdshell / OS コマンド実行が必要か？
 │
 └─ No
       │
-      Q2: SQL Agent / Linked Server / CLR / Service Broker が必要か？
+      Q2: 移行後も INSERT / UPDATE が発生するか？
       │
-      ├─ Yes → Azure SQL Managed Instance ★推奨
+      ├─ Yes（OLTP 継続）
+      │     │
+      │     Q3: SQL Agent / Linked Server / CLR / Service Broker が必要か？
+      │     │
+      │     ├─ Yes → Azure SQL Managed Instance ★推奨
+      │     │
+      │     └─ No（シンプルな CRUD のみ）
+      │           └─ Azure SQL Database（最もコスト最適）
       │
-      └─ No（シンプルな CRUD のみ）
+      └─ No（READ_ONLY・参照専用・アーカイブ）
             │
-            └─ Azure SQL Database（最もコスト最適）
+            Q4: データ量が 1TB 以上、または参照頻度が低いか？
+            │
+            ├─ Yes → Azure Synapse + ADLS ★コスト最安
+            │         ※ アプリ接続変更・T-SQL 一部制限あり
+            │
+            └─ No（小容量・既存接続文字列を変えたくない）
+                  └─ Azure SQL Database Serverless（自動一時停止）
 ```
 
 ---
