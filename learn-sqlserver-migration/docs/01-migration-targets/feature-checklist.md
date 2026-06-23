@@ -13,15 +13,25 @@
 
 ---
 
-## 記入前に実行する確認クエリ（SSMS で実行）
+## 実行DBの凡例
+
+| 表記 | 意味 | 接続方法 |
+|---|---|---|
+| `master` | サーバーレベルの情報。master DB で実行 | SSMS で接続後、DB を `master` に変更 |
+| `msdb` | SQL Agent・メール等の管理情報。msdb DB で実行 | SSMS で接続後、DB を `msdb` に変更 |
+| `各対象DB` | DB ごとに情報が異なる。移行対象 DB に切り替えて実行 | USE \[DB名\] を先頭に付けて実行 |
+
+---
+
+## 記入前に実行する一括確認クエリ（SSMS で実行）
 
 以下を最初に実行しておくと、各セクションの確認が速くなる。
 
 ```sql
--- ① サーバー設定一覧（xp_cmdshell 有効化など）
+-- ① サーバー設定一覧（xp_cmdshell 有効化など）  ← master で実行
 SELECT name, value_in_use FROM sys.configurations ORDER BY name;
 
--- ② データベース一覧と互換性レベル・サイズ
+-- ② データベース一覧と互換性レベル・サイズ  ← master で実行
 SELECT
     name,
     compatibility_level,
@@ -29,41 +39,41 @@ SELECT
 FROM sys.databases d
 WHERE database_id > 4;
 
--- ③ リンクサーバー一覧
+-- ③ リンクサーバー一覧  ← master で実行
 SELECT name, product, provider FROM sys.servers WHERE is_linked = 1;
 
--- ④ CLR アセンブリ一覧
+-- ④ CLR アセンブリ一覧  ← 各対象DB で実行
 SELECT name, permission_set_desc FROM sys.assemblies WHERE is_user_defined = 1;
 
--- ⑤ SQL Agent ジョブ数
-SELECT COUNT(*) AS job_count FROM msdb.dbo.sysjobs;
+-- ⑤ SQL Agent ジョブ一覧  ← msdb で実行
+SELECT name, enabled FROM msdb.dbo.sysjobs ORDER BY name;
 
--- ⑥ レプリケーション（パブリッシャー確認）
+-- ⑥ レプリケーション（パブリッシャー確認）  ← master で実行
 SELECT name FROM sys.databases WHERE is_published = 1 OR is_subscribed = 1;
 
--- ⑦ CDC（変更データキャプチャ）有効DB
+-- ⑦ CDC（変更データキャプチャ）有効DB  ← master で実行
 SELECT name FROM sys.databases WHERE is_cdc_enabled = 1;
 
--- ⑧ Service Broker 有効DB
+-- ⑧ Service Broker 有効DB  ← master で実行
 SELECT name FROM sys.databases WHERE is_broker_enabled = 1;
 
--- ⑨ FILESTREAM 設定
+-- ⑨ FILESTREAM 設定  ← master で実行
 SELECT SERVERPROPERTY('FilestreamEffectiveLevel') AS filestream_level;
 
--- ⑩ Full-Text Search カタログ
+-- ⑩ Full-Text Search カタログ  ← 各対象DB で実行
 SELECT name FROM sys.fulltext_catalogs;
 
--- ⑪ 変更追跡（Change Tracking）有効DB
+-- ⑪ 変更追跡（Change Tracking）有効DB  ← master で実行
 SELECT DB_NAME(database_id) AS db_name FROM sys.change_tracking_databases;
 
--- ⑫ Windows ログイン一覧
+-- ⑫ Windows ログイン一覧  ← master で実行
 SELECT name, type_desc FROM sys.server_principals WHERE type IN ('U','G') AND name NOT LIKE 'NT %';
 
--- ⑬ SQL Agent ジョブの OS コマンド / SSIS ステップ一覧
+-- ⑬ SQL Agent ジョブの OS コマンド / SSIS ステップ一覧  ← msdb で実行
 SELECT j.name AS job_name, s.step_name, s.subsystem
 FROM msdb.dbo.sysjobs j
 JOIN msdb.dbo.sysjobsteps s ON j.job_id = s.job_id
-WHERE s.subsystem IN ('CmdExec','SSIS','ISAPACKAGE')
+WHERE s.subsystem IN ('CmdExec','SSIS','ISAPACKAGE','PowerShell')
 ORDER BY j.name;
 ```
 
@@ -73,12 +83,12 @@ ORDER BY j.name;
 
 > **ここでチェックがあると SQL on VM 確定（PaaS 移行不可）**
 
-| # | 機能 | 検知 | 判定 | 確認方法 |
-|---|---|---|:---:|---|
-| 1-1 | **xp_cmdshell**（OS コマンド実行） | | - | `SELECT value_in_use FROM sys.configurations WHERE name = 'xp_cmdshell'`（1なら使用） |
-| 1-2 | **FILESTREAM / FileTable**（ファイルシステム連携） | | - | `SELECT SERVERPROPERTY('FilestreamEffectiveLevel')`（0以外なら使用） |
-| 1-3 | **OS レベルの外部プロセス呼び出し**（PowerShell / バッチ / シェル実行） | | - | `SELECT j.name, s.step_name FROM msdb.dbo.sysjobs j JOIN msdb.dbo.sysjobsteps s ON j.job_id = s.job_id WHERE s.subsystem IN ('CmdExec','PowerShell')` |
-| 1-4 | **カスタム ETL ツール（SSIS パッケージのローカル実行）** | | - | `SELECT j.name, s.step_name FROM msdb.dbo.sysjobs j JOIN msdb.dbo.sysjobsteps s ON j.job_id = s.job_id WHERE s.subsystem IN ('SSIS','ISAPACKAGE')` |
+| # | 機能 | 実行DB | 確認SQL | 検知 | 判定 |
+|---|---|:---:|---|---|:---:|
+| 1-1 | **xp_cmdshell**（OS コマンド実行） | master | `SELECT value_in_use FROM sys.configurations WHERE name = 'xp_cmdshell'`（1なら使用） | | - |
+| 1-2 | **FILESTREAM / FileTable**（ファイルシステム連携） | master | `SELECT SERVERPROPERTY('FilestreamEffectiveLevel')`（0以外なら使用） | | - |
+| 1-3 | **OS レベルの外部プロセス呼び出し**（PowerShell / バッチ / シェル実行） | msdb | `SELECT j.name, s.step_name, s.subsystem FROM msdb.dbo.sysjobs j JOIN msdb.dbo.sysjobsteps s ON j.job_id = s.job_id WHERE s.subsystem IN ('CmdExec','PowerShell')` | | - |
+| 1-4 | **カスタム ETL ツール（SSIS パッケージのローカル実行）** | msdb | `SELECT j.name, s.step_name FROM msdb.dbo.sysjobs j JOIN msdb.dbo.sysjobsteps s ON j.job_id = s.job_id WHERE s.subsystem IN ('SSIS','ISAPACKAGE')` | | - |
 
 **→ 1-1〜1-4 のいずれかに ☑ がある場合: `SQL Server on Azure VM` 一択**
 
@@ -88,12 +98,12 @@ ORDER BY j.name;
 
 > **ここでチェックがあると SQL MI 以上が必要（SQL Database / Synapse は不可）**
 
-| # | 機能 | 検知 | 判定 | 確認方法 |
-|---|---|---|:---:|---|
-| 2-1 | **SQL Server Agent ジョブ**（定期ジョブ全般） | | - | `SELECT name, enabled FROM msdb.dbo.sysjobs ORDER BY name`（システムジョブ除外後の件数を判定に記録） |
-| 2-2 | **メンテナンスプラン**（バックアップ・統計更新・DBCC等の自動化） | | - | `SELECT name FROM msdb.dbo.sysmaintplan_plans` |
-| 2-3 | **Database Mail**（ジョブ通知・アラートメール） | | - | `SELECT name FROM msdb.dbo.sysmail_profile` |
-| 2-4 | **SQL Server Agent アラート**（エラー・パフォーマンス監視） | | - | `SELECT name, message_id FROM msdb.dbo.sysalerts` |
+| # | 機能 | 実行DB | 確認SQL | 検知 | 判定 |
+|---|---|:---:|---|---|:---:|
+| 2-1 | **SQL Server Agent ジョブ**（定期ジョブ全般） | msdb | `SELECT name, enabled FROM msdb.dbo.sysjobs ORDER BY name`（システムジョブ除外後の件数を判定に記録） | | - |
+| 2-2 | **メンテナンスプラン**（バックアップ・統計更新・DBCC等の自動化） | msdb | `SELECT name FROM msdb.dbo.sysmaintplan_plans` | | - |
+| 2-3 | **Database Mail**（ジョブ通知・アラートメール） | msdb | `SELECT name FROM msdb.dbo.sysmail_profile` | | - |
+| 2-4 | **SQL Server Agent アラート**（エラー・パフォーマンス監視） | msdb | `SELECT name, message_id FROM msdb.dbo.sysalerts` | | - |
 
 **→ 2-1〜2-4 のいずれかに ☑ がある場合: `SQL MI` または `SQL on VM`**
 
@@ -110,12 +120,12 @@ ORDER BY j.name;
 
 > **異種 DBMS への接続は SQL on VM 確定。SQL Server 同士は SQL MI で可**
 
-| # | 機能 | 検知 | 判定 | 確認方法 |
-|---|---|---|:---:|---|
-| 3-1 | **Linked Server（SQL Server → SQL Server）** | | - | `SELECT name, product FROM sys.servers WHERE is_linked = 1` |
-| 3-2 | **Linked Server（SQL Server → Oracle / DB2 / その他）** | | - | `SELECT name, product FROM sys.servers WHERE is_linked = 1 AND product <> 'SQL Server'` |
-| 3-3 | **MSDTC（分散トランザクション）** | | - | `SELECT OBJECT_NAME(object_id) FROM sys.sql_modules WHERE definition LIKE '%DISTRIBUTED TRANSACTION%'`（※各DBで実行） |
-| 3-4 | **OpenRowSet / OpenDataSource（アドホック外部接続）** | | - | `SELECT OBJECT_NAME(object_id) FROM sys.sql_modules WHERE definition LIKE '%OPENROWSET%' OR definition LIKE '%OPENDATASOURCE%'`（※各DBで実行） |
+| # | 機能 | 実行DB | 確認SQL | 検知 | 判定 |
+|---|---|:---:|---|---|:---:|
+| 3-1 | **Linked Server（SQL Server → SQL Server）** | master | `SELECT name, product FROM sys.servers WHERE is_linked = 1` | | - |
+| 3-2 | **Linked Server（SQL Server → Oracle / DB2 / その他）** | master | `SELECT name, product FROM sys.servers WHERE is_linked = 1 AND product <> 'SQL Server'` | | - |
+| 3-3 | **MSDTC（分散トランザクション）** | 各対象DB | `SELECT OBJECT_NAME(object_id) FROM sys.sql_modules WHERE definition LIKE '%DISTRIBUTED TRANSACTION%'` | | - |
+| 3-4 | **OpenRowSet / OpenDataSource（アドホック外部接続）** | 各対象DB | `SELECT OBJECT_NAME(object_id) FROM sys.sql_modules WHERE definition LIKE '%OPENROWSET%' OR definition LIKE '%OPENDATASOURCE%'` | | - |
 
 **判定:**
 - 3-2 に ☑ → `SQL on VM` 一択（SQL MI は異種 DBMS Linked Server 非対応）
@@ -125,13 +135,13 @@ ORDER BY j.name;
 
 ## カテゴリ 4｜プログラマビリティ
 
-| # | 機能 | 検知 | 判定 | 確認方法 |
-|---|---|---|:---:|---|
-| 4-1 | **CLR 統合（SAFE アセンブリ）** | | - | `SELECT name, permission_set_desc FROM sys.assemblies WHERE is_user_defined = 1` |
-| 4-2 | **CLR 統合（UNSAFE / EXTERNAL_ACCESS アセンブリ）** | | - | `SELECT name, permission_set_desc FROM sys.assemblies WHERE is_user_defined = 1 AND permission_set_desc IN ('UNSAFE_ACCESS','EXTERNAL_ACCESS')` |
-| 4-3 | **ストアドプロシージャ・UDF・ビュー** | | - | `SELECT COUNT(*) FROM sys.objects WHERE type IN ('P','FN','V')`（※各DBで実行） |
-| 4-4 | **サーバーレベル DDL トリガー** | | - | `SELECT name, event_group_type_desc FROM sys.server_triggers` |
-| 4-5 | **sp_configure（サーバー設定の変更）** | | - | `SELECT OBJECT_NAME(object_id) FROM sys.sql_modules WHERE definition LIKE '%sp_configure%'`（※各DBで実行） |
+| # | 機能 | 実行DB | 確認SQL | 検知 | 判定 |
+|---|---|:---:|---|---|:---:|
+| 4-1 | **CLR 統合（SAFE アセンブリ）** | 各対象DB | `SELECT name, permission_set_desc FROM sys.assemblies WHERE is_user_defined = 1` | | - |
+| 4-2 | **CLR 統合（UNSAFE / EXTERNAL_ACCESS アセンブリ）** | 各対象DB | `SELECT name, permission_set_desc FROM sys.assemblies WHERE is_user_defined = 1 AND permission_set_desc IN ('UNSAFE_ACCESS','EXTERNAL_ACCESS')` | | - |
+| 4-3 | **ストアドプロシージャ・UDF・ビュー** | 各対象DB | `SELECT type_desc AS 種類, COUNT(*) AS 件数 FROM sys.objects WHERE type IN ('P','FN','V') AND is_ms_shipped = 0 GROUP BY type_desc` | | - |
+| 4-4 | **サーバーレベル DDL トリガー** | master | `SELECT name, event_group_type_desc FROM sys.server_triggers` | | - |
+| 4-5 | **sp_configure（サーバー設定の変更）** | 各対象DB | `SELECT OBJECT_NAME(object_id) FROM sys.sql_modules WHERE definition LIKE '%sp_configure%'` | | - |
 
 **判定:**
 - 4-2 に ☑ → `SQL on VM` 一択（CLR UNSAFE は SQL MI 非対応）
@@ -141,13 +151,13 @@ ORDER BY j.name;
 
 ## カテゴリ 5｜レプリケーション・変更管理
 
-| # | 機能 | 検知 | 判定 | 確認方法 |
-|---|---|---|:---:|---|
-| 5-1 | **トランザクション レプリケーション（パブリッシャー）** | | - | `SELECT name FROM sys.databases WHERE is_published = 1` |
-| 5-2 | **マージ レプリケーション** | | - | `SELECT name FROM msdb.dbo.sysmergepublications` |
-| 5-3 | **スナップショット レプリケーション** | | - | `SELECT name FROM msdb.dbo.syspublications WHERE repl_freq = 1` |
-| 5-4 | **変更データキャプチャ（CDC）** | | - | `SELECT name FROM sys.databases WHERE is_cdc_enabled = 1` |
-| 5-5 | **変更追跡（Change Tracking）** | | - | `SELECT DB_NAME(database_id) AS db_name FROM sys.change_tracking_databases` |
+| # | 機能 | 実行DB | 確認SQL | 検知 | 判定 |
+|---|---|:---:|---|---|:---:|
+| 5-1 | **トランザクション レプリケーション（パブリッシャー）** | master | `SELECT name FROM sys.databases WHERE is_published = 1` | | - |
+| 5-2 | **マージ レプリケーション** | msdb | `SELECT name FROM msdb.dbo.sysmergepublications` | | - |
+| 5-3 | **スナップショット レプリケーション** | msdb | `SELECT name FROM msdb.dbo.syspublications WHERE repl_freq = 1` | | - |
+| 5-4 | **変更データキャプチャ（CDC）** | master | `SELECT name FROM sys.databases WHERE is_cdc_enabled = 1` | | - |
+| 5-5 | **変更追跡（Change Tracking）** | master | `SELECT DB_NAME(database_id) AS db_name FROM sys.change_tracking_databases` | | - |
 
 **判定:**
 - 5-2 に ☑ → `SQL on VM` 一択（マージレプリは SQL MI 非対応）
@@ -158,10 +168,10 @@ ORDER BY j.name;
 
 ## カテゴリ 6｜非同期・メッセージング
 
-| # | 機能 | 検知 | 判定 | 確認方法 |
-|---|---|---|:---:|---|
-| 6-1 | **Service Broker（DB 内部メッセージングのみ）** | | - | `SELECT name FROM sys.databases WHERE is_broker_enabled = 1` |
-| 6-2 | **Service Broker（外部アクティベーション：SQL 外のプロセス呼び出し）** | | - | `SELECT name, activation_procedure FROM sys.service_queues WHERE activation_procedure IS NOT NULL`（※各DBで実行） |
+| # | 機能 | 実行DB | 確認SQL | 検知 | 判定 |
+|---|---|:---:|---|---|:---:|
+| 6-1 | **Service Broker（DB 内部メッセージングのみ）** | master | `SELECT name FROM sys.databases WHERE is_broker_enabled = 1` | | - |
+| 6-2 | **Service Broker（外部アクティベーション：SQL 外のプロセス呼び出し）** | 各対象DB | `SELECT name, activation_procedure FROM sys.service_queues WHERE activation_procedure IS NOT NULL` | | - |
 
 **判定:**
 - 6-2 に ☑ → `SQL on VM` 一択（外部アクティベーションは SQL MI 非対応）
@@ -171,13 +181,13 @@ ORDER BY j.name;
 
 ## カテゴリ 7｜全文検索・高度データ機能
 
-| # | 機能 | 検知 | 判定 | 確認方法 |
-|---|---|---|:---:|---|
-| 7-1 | **Full-Text Search（全文検索）** | | - | `SELECT name FROM sys.fulltext_catalogs` |
-| 7-2 | **In-Memory OLTP（メモリ最適化テーブル）** | | - | `SELECT DB_NAME(database_id) AS db_name FROM sys.filegroups fg JOIN sys.databases d ON fg.database_id = d.database_id WHERE fg.type = 'FX'` |
-| 7-3 | **テンポラル テーブル（履歴テーブル）** | | - | `SELECT name FROM sys.tables WHERE temporal_type = 2`（※各DBで実行） |
-| 7-4 | **パーティション テーブル / パーティション関数** | | - | `SELECT COUNT(*) FROM sys.partition_functions`（※各DBで実行） |
-| 7-5 | **データ圧縮（行・ページ圧縮）** | | - | `SELECT COUNT(*) FROM sys.partitions WHERE data_compression > 0`（※各DBで実行） |
+| # | 機能 | 実行DB | 確認SQL | 検知 | 判定 |
+|---|---|:---:|---|---|:---:|
+| 7-1 | **Full-Text Search（全文検索）** | 各対象DB | `SELECT name FROM sys.fulltext_catalogs` | | - |
+| 7-2 | **In-Memory OLTP（メモリ最適化テーブル）** | 各対象DB | `SELECT name FROM sys.filegroups WHERE type = 'FX'` | | - |
+| 7-3 | **テンポラル テーブル（履歴テーブル）** | 各対象DB | `SELECT name FROM sys.tables WHERE temporal_type = 2` | | - |
+| 7-4 | **パーティション テーブル / パーティション関数** | 各対象DB | `SELECT COUNT(*) FROM sys.partition_functions` | | - |
+| 7-5 | **データ圧縮（行・ページ圧縮）** | 各対象DB | `SELECT COUNT(*) FROM sys.partitions WHERE data_compression > 0` | | - |
 
 **判定:**
 - 7-1〜7-5 いずれも `SQL DB` / `SQL MI` / `SQL on VM` で対応可
@@ -187,13 +197,13 @@ ORDER BY j.name;
 
 ## カテゴリ 8｜セキュリティ・暗号化
 
-| # | 機能 | 検知 | 判定 | 確認方法 |
-|---|---|---|:---:|---|
-| 8-1 | **Windows 認証（Active Directory）** | | - | `SELECT name, type_desc FROM sys.server_principals WHERE type IN ('U','G') AND name NOT LIKE 'NT %'` |
-| 8-2 | **SQL 認証（ユーザー名・パスワード）** | | - | `SELECT name FROM sys.sql_logins WHERE name NOT LIKE '##%'` |
-| 8-3 | **TDE（透過的データ暗号化）** | | - | `SELECT name FROM sys.databases WHERE is_encrypted = 1` |
-| 8-4 | **Always Encrypted（列レベル暗号化）** | | - | `SELECT name FROM sys.column_encryption_keys`（※各DBで実行） |
-| 8-5 | **行レベル セキュリティ（RLS）** | | - | `SELECT name, is_enabled FROM sys.security_policies`（※各DBで実行） |
+| # | 機能 | 実行DB | 確認SQL | 検知 | 判定 |
+|---|---|:---:|---|---|:---:|
+| 8-1 | **Windows 認証（Active Directory）** | master | `SELECT name, type_desc FROM sys.server_principals WHERE type IN ('U','G') AND name NOT LIKE 'NT %'` | | - |
+| 8-2 | **SQL 認証（ユーザー名・パスワード）** | master | `SELECT name FROM sys.sql_logins WHERE name NOT LIKE '##%'` | | - |
+| 8-3 | **TDE（透過的データ暗号化）** | master | `SELECT name FROM sys.databases WHERE is_encrypted = 1` | | - |
+| 8-4 | **Always Encrypted（列レベル暗号化）** | 各対象DB | `SELECT name FROM sys.column_encryption_keys` | | - |
+| 8-5 | **行レベル セキュリティ（RLS）** | 各対象DB | `SELECT name, is_enabled FROM sys.security_policies` | | - |
 
 **判定:**
 - 8-1〜8-5 いずれも `SQL DB` / `SQL MI` / `SQL on VM` で対応可
@@ -205,13 +215,13 @@ ORDER BY j.name;
 
 > **ここは移行先の大分類（OLTP vs アーカイブ）を決める**
 
-| # | 質問 | 検知 | 判定 | 確認方法 |
-|---|---|---|:---:|---|
-| 9-1 | 移行後も **INSERT / UPDATE / DELETE** が発生するか | | - | アプリ仕様・業務フローを確認 |
-| 9-2 | 移行後は **SELECT（参照のみ）** になるか | | - | アプリ仕様・業務フローを確認 |
-| 9-3 | **データ量は 1TB 以上** か | | - | `SELECT SUM(size) * 8 / 1024 / 1024 AS total_GB FROM sys.master_files` |
-| 9-4 | **参照頻度が低い**（月数回程度）か | | - | 業務担当者へヒアリング |
-| 9-5 | **Power BI / 分析ツール** からのクエリが主な用途か | | - | 業務担当者へヒアリング |
+| # | 質問 | 実行DB | 確認SQL / 確認方法 | 検知 | 判定 |
+|---|---|:---:|---|---|:---:|
+| 9-1 | 移行後も **INSERT / UPDATE / DELETE** が発生するか | — | 業務担当者へヒアリング | | - |
+| 9-2 | 移行後は **SELECT（参照のみ）** になるか | — | 業務担当者へヒアリング | | - |
+| 9-3 | **データ量は 1TB 以上** か | master | `SELECT SUM(size) * 8 / 1024 / 1024 AS total_GB FROM sys.master_files WHERE database_id > 4` | | - |
+| 9-4 | **参照頻度が低い**（月数回程度）か | — | 業務担当者へヒアリング | | - |
+| 9-5 | **Power BI / 分析ツール** からのクエリが主な用途か | — | 業務担当者へヒアリング | | - |
 
 **判定:**
 - 9-1 に ☑ → Synapse + ADLS は候補から外れる（READ_ONLY 専用のため）
