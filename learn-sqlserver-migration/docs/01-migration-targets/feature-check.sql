@@ -63,6 +63,27 @@ FROM sys.databases
 WHERE is_published = 1;
 
 PRINT '';
+PRINT '[5-2] マージ レプリケーション ← SQL on VM 確定要件';
+SELECT name
+FROM sys.databases
+WHERE is_merge_published = 1;
+
+PRINT '';
+PRINT '[5-3] スナップショット レプリケーション';
+PRINT '   ※ スナップショットは is_published = 1 に含まれる（5-1 と同一フラグ）';
+PRINT '   ※ distribution DB が存在する場合のみ以下でスナップショット個別確認可能';
+IF DB_ID('distribution') IS NOT NULL
+BEGIN
+    SELECT name
+    FROM distribution.dbo.MSPublications
+    WHERE publication_type = 0;
+END
+ELSE
+BEGIN
+    PRINT '   distribution DB 未構成のため個別確認不可 — 5-1 の結果を参照';
+END
+
+PRINT '';
 PRINT '[5-4] CDC（変更データキャプチャ）有効 DB';
 SELECT name
 FROM sys.databases
@@ -160,16 +181,6 @@ PRINT '[2-4] SQL Server Agent アラート';
 SELECT name, message_id
 FROM msdb.dbo.sysalerts;
 
-PRINT '';
-PRINT '[5-2] マージ レプリケーション ← SQL on VM 確定要件';
-SELECT name
-FROM msdb.dbo.sysmergepublications;
-
-PRINT '';
-PRINT '[5-3] スナップショット レプリケーション';
-SELECT name
-FROM msdb.dbo.syspublications
-WHERE repl_freq = 1;
 GO
 
 -- ============================================================

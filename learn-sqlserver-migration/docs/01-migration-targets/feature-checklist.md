@@ -157,8 +157,8 @@ ORDER BY j.name;
 | # | 機能 | 実行DB | 確認SQL | 検知 | 判定 |
 |---|---|:---:|---|---|:---:|
 | 5-1 | **トランザクション レプリケーション（パブリッシャー）** | master | `SELECT name FROM sys.databases WHERE is_published = 1` | | - |
-| 5-2 | **マージ レプリケーション** | msdb | `SELECT name FROM msdb.dbo.sysmergepublications` | | - |
-| 5-3 | **スナップショット レプリケーション** | msdb | `SELECT name FROM msdb.dbo.syspublications WHERE repl_freq = 1` | | - |
+| 5-2 | **マージ レプリケーション** | master | `SELECT name FROM sys.databases WHERE is_merge_published = 1` | | - |
+| 5-3 | **スナップショット レプリケーション** | master | `SELECT name FROM sys.databases WHERE is_published = 1`（5-1 と同一フラグ。区別は distribution DB の `MSPublications.publication_type = 0` で確認） | | - |
 | 5-4 | **変更データキャプチャ（CDC）** | master | `SELECT name FROM sys.databases WHERE is_cdc_enabled = 1` | | - |
 | 5-5 | **変更追跡（Change Tracking）** | master | `SELECT DB_NAME(database_id) AS db_name FROM sys.change_tracking_databases` | | - |
 
