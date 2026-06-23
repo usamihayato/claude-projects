@@ -140,7 +140,7 @@ ORDER BY j.name;
 | 4-1 | **CLR 統合（SAFE アセンブリ）** | 各対象DB | `SELECT name, permission_set_desc FROM sys.assemblies WHERE is_user_defined = 1` | | - |
 | 4-2 | **CLR 統合（UNSAFE / EXTERNAL_ACCESS アセンブリ）** | 各対象DB | `SELECT name, permission_set_desc FROM sys.assemblies WHERE is_user_defined = 1 AND permission_set_desc IN ('UNSAFE_ACCESS','EXTERNAL_ACCESS')` | | - |
 | 4-3 | **ストアドプロシージャ・UDF・ビュー** | 各対象DB | `SELECT type_desc AS 種類, COUNT(*) AS 件数 FROM sys.objects WHERE type IN ('P','FN','V') AND is_ms_shipped = 0 GROUP BY type_desc` | | - |
-| 4-4 | **サーバーレベル DDL トリガー** | master | `SELECT name, event_group_type_desc FROM sys.server_triggers` | | - |
+| 4-4 | **サーバーレベル DDL トリガー** | master | `SELECT t.name, t.is_disabled, e.event_group_type_desc FROM sys.server_triggers t LEFT JOIN sys.server_trigger_events e ON t.object_id = e.object_id` | | - |
 | 4-5 | **sp_configure（サーバー設定の変更）** | 各対象DB | `SELECT OBJECT_NAME(object_id) FROM sys.sql_modules WHERE definition LIKE '%sp_configure%'` | | - |
 
 **判定:**

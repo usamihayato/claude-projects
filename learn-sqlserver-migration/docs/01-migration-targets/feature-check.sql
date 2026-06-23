@@ -52,8 +52,9 @@ WHERE is_linked = 1
 
 PRINT '';
 PRINT '[4-4] サーバーレベル DDL トリガー';
-SELECT name, event_group_type_desc
-FROM sys.server_triggers;
+SELECT t.name, t.is_disabled, e.event_group_type_desc
+FROM sys.server_triggers      t
+LEFT JOIN sys.server_trigger_events e ON t.object_id = e.object_id;
 
 PRINT '';
 PRINT '[5-1] トランザクション レプリケーション（パブリッシャー）';
