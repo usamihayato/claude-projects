@@ -47,6 +47,19 @@ SELECT SERVERPROPERTY('FilestreamEffectiveLevel') AS filestream_level;
 
 -- ⑩ Full-Text Search カタログ
 SELECT name FROM sys.fulltext_catalogs;
+
+-- ⑪ 変更追跡（Change Tracking）有効DB
+SELECT DB_NAME(database_id) AS db_name FROM sys.change_tracking_databases;
+
+-- ⑫ Windows ログイン一覧
+SELECT name, type_desc FROM sys.server_principals WHERE type IN ('U','G') AND name NOT LIKE 'NT %';
+
+-- ⑬ SQL Agent ジョブの OS コマンド / SSIS ステップ一覧
+SELECT j.name AS job_name, s.step_name, s.subsystem
+FROM msdb.dbo.sysjobs j
+JOIN msdb.dbo.sysjobsteps s ON j.job_id = s.job_id
+WHERE s.subsystem IN ('CmdExec','SSIS','ISAPACKAGE')
+ORDER BY j.name;
 ```
 
 ---
@@ -59,8 +72,8 @@ SELECT name FROM sys.fulltext_catalogs;
 |---|---|:---:|---|
 | 1-1 | **xp_cmdshell**（OS コマンド実行） | ☐ / - | `SELECT value_in_use FROM sys.configurations WHERE name = 'xp_cmdshell'`（1なら使用） |
 | 1-2 | **FILESTREAM / FileTable**（ファイルシステム連携） | ☐ / - | `SELECT SERVERPROPERTY('FilestreamEffectiveLevel')`（0以外なら使用） |
-| 1-3 | **OS レベルの外部プロセス呼び出し**（PowerShell / バッチ / シェル実行） | ☐ / - | SQL Agent ジョブの「オペレーティングシステムコマンド実行」ステップを確認 |
-| 1-4 | **カスタム ETL ツール（SSIS パッケージのローカル実行）** | ☐ / - | ジョブステップの種類「SQL Server Integration Services パッケージ」を確認 |
+| 1-3 | **OS レベルの外部プロセス呼び出し**（PowerShell / バッチ / シェル実行） | ☐ / - | `SELECT j.name, s.step_name FROM msdb.dbo.sysjobs j JOIN msdb.dbo.sysjobsteps s ON j.job_id = s.job_id WHERE s.subsystem = 'CmdExec'`（1件以上で使用） |
+| 1-4 | **カスタム ETL ツール（SSIS パッケージのローカル実行）** | ☐ / - | `SELECT j.name, s.step_name FROM msdb.dbo.sysjobs j JOIN msdb.dbo.sysjobsteps s ON j.job_id = s.job_id WHERE s.subsystem IN ('SSIS','ISAPACKAGE')`（1件以上で使用） |
 
 **→ 1-1〜1-4 のいずれかに ☑ がある場合: `SQL Server on Azure VM` 一択**
 
@@ -73,7 +86,7 @@ SELECT name FROM sys.fulltext_catalogs;
 | # | 機能 | 使用 | 確認方法 |
 |---|---|:---:|---|
 | 2-1 | **SQL Server Agent ジョブ**（定期ジョブ全般） | ☐ / - | `SELECT COUNT(*) FROM msdb.dbo.sysjobs` |
-| 2-2 | **メンテナンスプラン**（バックアップ・統計更新・DBCC等の自動化） | ☐ / - | SSMS → 管理 → メンテナンスプランで確認 |
+| 2-2 | **メンテナンスプラン**（バックアップ・統計更新・DBCC等の自動化） | ☐ / - | `SELECT name FROM msdb.dbo.sysmaintplan_plans`（1件以上で使用） |
 | 2-3 | **Database Mail**（ジョブ通知・アラートメール） | ☐ / - | `SELECT * FROM msdb.dbo.sysmail_profile` |
 | 2-4 | **SQL Server Agent アラート**（エラー・パフォーマンス監視） | ☐ / - | `SELECT COUNT(*) FROM msdb.dbo.sysalerts` |
 
@@ -88,9 +101,9 @@ SELECT name FROM sys.fulltext_catalogs;
 | # | 機能 | 使用 | 確認方法 |
 |---|---|:---:|---|
 | 3-1 | **Linked Server（SQL Server → SQL Server）** | ☐ / - | `SELECT name, product FROM sys.servers WHERE is_linked = 1` |
-| 3-2 | **Linked Server（SQL Server → Oracle / DB2 / その他）** | ☐ / - | 同上で `product` 列が 'Oracle' 等なら該当 |
-| 3-3 | **MSDTC（分散トランザクション）** | ☐ / - | アプリコードで `BEGIN DISTRIBUTED TRANSACTION` / `TransactionScope` を検索 |
-| 3-4 | **OpenRowSet / OpenDataSource（アドホック外部接続）** | ☐ / - | ストアドプロシージャ・クエリをグレップして確認 |
+| 3-2 | **Linked Server（SQL Server → Oracle / DB2 / その他）** | ☐ / - | `SELECT name, product FROM sys.servers WHERE is_linked = 1 AND product <> 'SQL Server'`（1件以上で使用） |
+| 3-3 | **MSDTC（分散トランザクション）** | ☐ / - | `SELECT OBJECT_NAME(object_id) FROM sys.sql_modules WHERE definition LIKE '%DISTRIBUTED TRANSACTION%'`（※各DBで実行） |
+| 3-4 | **OpenRowSet / OpenDataSource（アドホック外部接続）** | ☐ / - | `SELECT OBJECT_NAME(object_id) FROM sys.sql_modules WHERE definition LIKE '%OPENROWSET%' OR definition LIKE '%OPENDATASOURCE%'`（※各DBで実行） |
 
 **判定:**
 - 3-2 に ☑ → `SQL on VM` 一択（SQL MI は異種 DBMS Linked Server 非対応）
@@ -103,10 +116,10 @@ SELECT name FROM sys.fulltext_catalogs;
 | # | 機能 | 使用 | 確認方法 |
 |---|---|:---:|---|
 | 4-1 | **CLR 統合（SAFE アセンブリ）** | ☐ / - | `SELECT name, permission_set_desc FROM sys.assemblies WHERE is_user_defined = 1` |
-| 4-2 | **CLR 統合（UNSAFE / EXTERNAL_ACCESS アセンブリ）** | ☐ / - | 同上で `permission_set_desc IN ('UNSAFE_ACCESS','EXTERNAL_ACCESS')` |
+| 4-2 | **CLR 統合（UNSAFE / EXTERNAL_ACCESS アセンブリ）** | ☐ / - | `SELECT name, permission_set_desc FROM sys.assemblies WHERE is_user_defined = 1 AND permission_set_desc IN ('UNSAFE_ACCESS','EXTERNAL_ACCESS')`（1件以上で使用） |
 | 4-3 | **ストアドプロシージャ・UDF・ビュー** | ☐ / - | `SELECT COUNT(*) FROM sys.objects WHERE type IN ('P','FN','V')` |
 | 4-4 | **サーバーレベル DDL トリガー** | ☐ / - | `SELECT * FROM sys.server_triggers` |
-| 4-5 | **sp_configure（サーバー設定の変更）** | ☐ / - | SQL Agent ジョブ・SP 内に sp_configure 呼び出しがあるか確認 |
+| 4-5 | **sp_configure（サーバー設定の変更）** | ☐ / - | `SELECT OBJECT_NAME(object_id) FROM sys.sql_modules WHERE definition LIKE '%sp_configure%'`（※各DBで実行） |
 
 **判定:**
 - 4-2 に ☑ → `SQL on VM` 一択（CLR UNSAFE は SQL MI 非対応）
@@ -122,7 +135,7 @@ SELECT name FROM sys.fulltext_catalogs;
 | 5-2 | **マージ レプリケーション** | ☐ / - | `SELECT * FROM msdb.dbo.sysmergepublications` |
 | 5-3 | **スナップショット レプリケーション** | ☐ / - | `SELECT * FROM msdb.dbo.syspublications WHERE repl_freq = 1` |
 | 5-4 | **変更データキャプチャ（CDC）** | ☐ / - | `SELECT name FROM sys.databases WHERE is_cdc_enabled = 1` |
-| 5-5 | **変更追跡（Change Tracking）** | ☐ / - | `SELECT name FROM sys.databases WHERE is_change_tracking_on = 1` |
+| 5-5 | **変更追跡（Change Tracking）** | ☐ / - | `SELECT DB_NAME(database_id) AS db_name FROM sys.change_tracking_databases`（1件以上で使用） |
 
 **判定:**
 - 5-2 に ☑ → `SQL on VM` 一択（マージレプリは SQL MI 非対応）
@@ -136,7 +149,7 @@ SELECT name FROM sys.fulltext_catalogs;
 | # | 機能 | 使用 | 確認方法 |
 |---|---|:---:|---|
 | 6-1 | **Service Broker（DB 内部メッセージングのみ）** | ☐ / - | `SELECT name FROM sys.databases WHERE is_broker_enabled = 1` |
-| 6-2 | **Service Broker（外部アクティベーション：SQL 外のプロセス呼び出し）** | ☐ / - | `SELECT * FROM sys.dm_broker_activated_tasks` または設計書で確認 |
+| 6-2 | **Service Broker（外部アクティベーション：SQL 外のプロセス呼び出し）** | ☐ / - | `SELECT name, activation_procedure FROM sys.service_queues WHERE activation_procedure IS NOT NULL`（※各DBで実行、1件以上で使用） |
 
 **判定:**
 - 6-2 に ☑ → `SQL on VM` 一択（外部アクティベーションは SQL MI 非対応）
@@ -149,7 +162,7 @@ SELECT name FROM sys.fulltext_catalogs;
 | # | 機能 | 使用 | 確認方法 |
 |---|---|:---:|---|
 | 7-1 | **Full-Text Search（全文検索）** | ☐ / - | `SELECT name FROM sys.fulltext_catalogs` |
-| 7-2 | **In-Memory OLTP（メモリ最適化テーブル）** | ☐ / - | `SELECT name FROM sys.databases WHERE is_memory_optimized_elevate_to_snapshot_on = 1` または `sys.filegroups WHERE type = 'FX'` |
+| 7-2 | **In-Memory OLTP（メモリ最適化テーブル）** | ☐ / - | `SELECT DB_NAME(database_id) AS db_name FROM sys.filegroups fg JOIN sys.databases d ON fg.database_id = d.database_id WHERE fg.type = 'FX'`（※master で実行、1件以上で使用） |
 | 7-3 | **テンポラル テーブル（履歴テーブル）** | ☐ / - | `SELECT name FROM sys.tables WHERE temporal_type = 2` |
 | 7-4 | **パーティション テーブル / パーティション関数** | ☐ / - | `SELECT COUNT(*) FROM sys.partition_functions` |
 | 7-5 | **データ圧縮（行・ページ圧縮）** | ☐ / - | `SELECT COUNT(*) FROM sys.partitions WHERE data_compression > 0` |
@@ -164,7 +177,7 @@ SELECT name FROM sys.fulltext_catalogs;
 
 | # | 機能 | 使用 | 確認方法 |
 |---|---|:---:|---|
-| 8-1 | **Windows 認証（Active Directory）** | ☐ / - | アプリ接続文字列に `Integrated Security=SSPI` があるか確認 |
+| 8-1 | **Windows 認証（Active Directory）** | ☐ / - | `SELECT name, type_desc FROM sys.server_principals WHERE type IN ('U','G') AND name NOT LIKE 'NT %'`（1件以上で使用） |
 | 8-2 | **SQL 認証（ユーザー名・パスワード）** | ☐ / - | `SELECT name FROM sys.sql_logins` |
 | 8-3 | **TDE（透過的データ暗号化）** | ☐ / - | `SELECT name FROM sys.databases WHERE is_encrypted = 1` |
 | 8-4 | **Always Encrypted（列レベル暗号化）** | ☐ / - | `SELECT name FROM sys.column_encryption_keys` |
