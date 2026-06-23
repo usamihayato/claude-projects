@@ -145,7 +145,10 @@ ORDER BY j.name;
 
 **判定:**
 - 4-2 に ☑ → `SQL on VM` 一択（CLR UNSAFE は SQL MI 非対応）
-- 4-1 / 4-3〜4-5 に ☑ → `SQL MI` または `SQL on VM`（SQL DB はストアドプロシージャ自体は可だが sp_configure は不可）
+- 4-1 に ☑ → `SQL MI` 以上（SQL DB は CLR 非対応）
+- 4-5 に ☑ → `SQL MI` 以上（SQL DB は sp_configure 非対応）
+- 4-3 のみ ☑（ビュー・SP・UDF の件数が多い）→ **SQL DB でも問題なし**（件数は移行先選定に影響しない）
+- 4-4 に ☑ → `SQL MI` 以上（SQL DB はサーバーレベル DDL トリガー非対応）
 
 ---
 
