@@ -142,13 +142,15 @@ ORDER BY j.name;
 | 4-3 | **ストアドプロシージャ・UDF・ビュー** | 各対象DB | `SELECT type_desc AS 種類, COUNT(*) AS 件数 FROM sys.objects WHERE type IN ('P','FN','V') AND is_ms_shipped = 0 GROUP BY type_desc` | | - |
 | 4-4 | **サーバーレベル DDL トリガー** | master | `SELECT t.name, t.is_disabled, e.event_group_type_desc FROM sys.server_triggers t LEFT JOIN sys.server_trigger_events e ON t.object_id = e.object_id` | | - |
 | 4-5 | **sp_configure（サーバー設定の変更）** | 各対象DB | `SELECT OBJECT_NAME(object_id) FROM sys.sql_modules WHERE definition LIKE '%sp_configure%'` | | - |
+| 4-6 | **クロスDB参照・リモート実行**（Azure SQL DB 互換性警告） | 各対象DB | `SELECT OBJECT_NAME(object_id) AS object_name FROM sys.sql_modules WHERE definition LIKE '%].dbo.%' OR definition LIKE '% AT [%' ORDER BY OBJECT_NAME(object_id)` | | - |
 
 **判定:**
 - 4-2 に ☑ → `SQL on VM` 一択（CLR UNSAFE は SQL MI 非対応）
 - 4-1 に ☑ → `SQL MI` 以上（SQL DB は CLR 非対応）
 - 4-5 に ☑ → `SQL MI` 以上（SQL DB は sp_configure 非対応）
-- 4-3 のみ ☑（ビュー・SP・UDF の件数が多い）→ **SQL DB でも問題なし**（件数は移行先選定に影響しない）
+- 4-3 のみ ☑（ビュー・SP・UDF の件数が多い）→ **SQL DB でも問題なし**（BACPAC / DMS でスキーマごと移行されるため件数は移行先選定に影響しない）
 - 4-4 に ☑ → `SQL MI` 以上（SQL DB はサーバーレベル DDL トリガー非対応）
+- 4-6 に ☑ → 移行先選定には影響しないが、**SQL DB 移行後に動作確認必須**（クロスDB参照は別 DB が同一サーバーに存在しないためエラーになる可能性。SQL MI なら Linked Server 設定で回避できる場合あり）
 
 ---
 

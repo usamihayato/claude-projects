@@ -270,6 +270,16 @@ FROM sys.sql_modules
 WHERE definition LIKE ''%sp_configure%'';';
     EXEC(@sql);
 
+    -- [4-6] クロスDB参照・リモート実行（Azure SQL DB 互換性警告）
+    PRINT '[4-6] クロスDB参照・リモート実行（Azure SQL DB 移行後に要動作確認）';
+    SET @sql = N'USE [' + @dbname + N'];
+SELECT OBJECT_NAME(object_id) AS object_name
+FROM sys.sql_modules
+WHERE definition LIKE ''%].dbo.%''
+   OR definition LIKE ''% AT [%''
+ORDER BY OBJECT_NAME(object_id);';
+    EXEC(@sql);
+
     -- [6-2] Service Broker 外部アクティベーション ← SQL on VM 確定要件
     PRINT '[6-2] Service Broker 外部アクティベーション ← SQL on VM 確定要件';
     SET @sql = N'USE [' + @dbname + N'];
