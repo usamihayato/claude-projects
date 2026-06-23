@@ -95,10 +95,11 @@ SELECT DB_NAME(database_id) AS db_name
 FROM sys.change_tracking_databases;
 
 PRINT '';
-PRINT '[6-1] Service Broker 有効 DB';
+PRINT '[6-1] Service Broker 有効 DB（tempdb/msdb 等システム DB は除外済み）';
 SELECT name
 FROM sys.databases
-WHERE is_broker_enabled = 1;
+WHERE is_broker_enabled = 1
+  AND database_id > 4;
 
 PRINT '';
 PRINT '[8-1] Windows 認証ログイン（AD ユーザー・グループ）';

@@ -175,7 +175,7 @@ ORDER BY j.name;
 
 | # | 機能 | 実行DB | 確認SQL | 検知 | 判定 |
 |---|---|:---:|---|---|:---:|
-| 6-1 | **Service Broker（DB 内部メッセージングのみ）** | master | `SELECT name FROM sys.databases WHERE is_broker_enabled = 1` | | - |
+| 6-1 | **Service Broker（DB 内部メッセージングのみ）** | master | `SELECT name FROM sys.databases WHERE is_broker_enabled = 1 AND database_id > 4` | | - |
 | 6-2 | **Service Broker（外部アクティベーション：SQL 外のプロセス呼び出し）** | 各対象DB | `SELECT name, activation_procedure FROM sys.service_queues WHERE activation_procedure IS NOT NULL` | | - |
 
 **判定:**
