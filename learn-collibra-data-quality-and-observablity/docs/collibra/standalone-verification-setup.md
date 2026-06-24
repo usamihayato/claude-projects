@@ -307,9 +307,11 @@ export SPARK_HOME="${OWL_BASE}/spark"
 export JAVA_HOME=/usr/lib/jvm/java-17-openjdk   # 2章で確認したパスを設定
 
 # ===== Java 17 対応オプション（2025.02 以降必須） =====
+# 出典: Additional Spark Standalone configuration options（公式）
 export EXTRA_JVM_OPTIONS="--add-opens java.base/java.util=ALL-UNNAMED \
-  --add-opens java.base/java.lang.invoke=ALL-UNNAMED \
-  --add-opens java.base/java.util.concurrent=ALL-UNNAMED \
+  --add-opens java.base/java.net=ALL-UNNAMED \
+  --add-opens java.base/sun.nio.ch=ALL-UNNAMED \
+  --add-opens java.base/java.nio=ALL-UNNAMED \
   --add-opens java.base/sun.util.calendar=ALL-UNNAMED"
 
 # ===== DQ Web ポート =====
