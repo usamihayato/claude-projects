@@ -17,7 +17,6 @@
 | Database Migration Assistant (DMA) | **廃止予定**（後継: Azure Migrate 統合） |
 | Azure Arc SQL Migration（ポータル統合 UI） | ✅ 現在の推奨 UI — **ただし SQL Server 2012 以降のみ対応** |
 | ネイティブ BACKUP / RESTORE FROM URL | ✅ **SQL Server 2008 R2 で確実に動作する公式サポート方式** |
-| LRS（Log Replay Service）PowerShell 版 | ✅ オンライン移行の代替候補（SQL Server 2008 以降対応） |
 | Azure DMS（Database Migration Service） | ✅ SQL Server 2008 以降のソースをサポート |
 | SqlPackage（BACPAC エクスポート/インポート） | ✅ SQL DB への移行で引き続き有効 |
 
@@ -34,14 +33,28 @@
 SQL Server 2008 R2（オンプレミス）
         │
         ├─ Azure SQL Managed Instance（PaaS・高互換）
-        │       ├─ 方式A: ネイティブバックアップ + RESTORE FROM URL（オフライン）
-        │       ├─ 方式B: Azure DMS オフライン + SHIR（オフライン）
-        │       └─ 方式C: LRS（Log Replay Service）（オンライン）
+        │       ├─ 方式A: ネイティブバックアップ + RESTORE FROM URL
+        │       └─ 方式B: Azure DMS オフライン + SHIR
         │
         └─ Azure SQL Database（PaaS・フルマネージド）
-                ├─ 方式D: SqlPackage（BACPAC）（オフライン・小〜中規模）
-                └─ 方式E: Azure DMS オフライン + SHIR（オフライン・大規模）
+                ├─ 方式C: SqlPackage（BACPAC）
+                └─ 方式D: Azure DMS オフライン + SHIR
 ```
+
+---
+
+## SHIR（セルフホステッド統合ランタイム）の設置場所について
+
+SHIR は**ソース SQL Server に TCP 1433 で到達でき、かつ Azure に TCP 443 で通信できる**  
+Windows マシンであればどこでも動作します。オンプレ限定ではありません。
+
+| 設置場所 | 条件 | 特徴 |
+|---|---|---|
+| **オンプレ Windows サーバー** | SQL Server と同一ネットワーク内 | 追加 VM コスト不要。SQL Server への通信はローカル完結 |
+| **Azure VNet 内の Windows VM** | VPN Gateway または ExpressRoute でオンプレと接続済み | VM コストが発生。Blob へのアップロードは Azure 内で完結するため高速 |
+
+> 大容量 DB の場合、SHIR を Azure 側に置くと Blob アップロードが Azure 内通信になるため  
+> ExpressRoute/VPN の帯域節約になる。ただしオンプレ → SHIR 間の転送は同じ回線を通る。
 
 ---
 
@@ -83,9 +96,9 @@ SQL Server 2008 R2（オンプレミス）
 
 ---
 
-### 方式 B — Azure DMS オフライン + SHIR
+### 方式 B — Azure DMS オフライン + SHIR（SQL MI 向け）
 
-**概要**: SHIR（セルフホステッド統合ランタイム）をオンプレに設置し、Azure DMS がバックアップ取得〜Blob アップロード〜RESTORE を自動実行する。
+**概要**: SHIR をソース SQL Server に到達できる Windows マシン（オンプレまたは Azure VNet 内 VM）にインストールし、Azure DMS がバックアップ取得〜Blob アップロード〜RESTORE を自動実行する。
 
 | 項目 | 内容 |
 |---|---|
@@ -108,7 +121,7 @@ SQL Server 2008 R2（オンプレミス）
 **コスト**
 | リソース | 概算 |
 |---|---|
-| SHIR | 無料 |
+| SHIR | 無料（インストール先 VM のコストは別途） |
 | DMS（Standard SKU） | 〜1〜2 万円/月（移行期間のみ） |
 | Blob Storage（一時） | 〜数千円 |
 | SQL MI | vCore 数による |
@@ -120,44 +133,9 @@ SQL Server 2008 R2（オンプレミス）
 
 ---
 
-### 方式 C — LRS（Log Replay Service）オンライン移行
-
-**概要**: Blob Storage に置いたバックアップを SQL MI が継続的に適用し続け、カットオーバー時のダウンタイムを数分〜数十分に抑える。
-
-| 項目 | 内容 |
-|---|---|
-| ダウンタイム | カットオーバー時のみ（数分〜数十分） |
-| 必要ツール | SSMS 18.x、AzCopy v10、Az PowerShell モジュール |
-| 向いている規模 | 大規模（数百 GB〜 TB 級） |
-| ADS 不要 | ✅ |
-| SQL 2008 R2 対応 | ✅（完全復旧モデル FULL が必要） |
-
-**メリット**
-- 最小ダウンタイムでの移行が可能
-- フルバックアップ中もアプリが稼働し続けられる
-- DMS 不要（課金リソースが少ない）
-
-**デメリット**
-- 完全復旧モデル（FULL）が必須
-- ログバックアップを定期的に手動取得・アップロードする必要あり
-- PowerShell による操作（GUI 管理なし）
-- ログ連鎖の管理ミスでリストアが失敗するリスクあり
-
-**コスト**
-| リソース | 概算 |
-|---|---|
-| Az PowerShell | 無料 |
-| Blob Storage | 〜数千円〜数万円（ログ蓄積量による） |
-| SQL MI | vCore 数による |
-
-**難易度**: ★★★★☆（高）  
-**おすすめ**: 24 時間稼働でダウンタイムを最小化したい・大容量 DB の場合 → **ダウンタイム制約が厳しい場合の選択肢**
-
----
-
 ## SQL DB 向け移行方式の比較
 
-### 方式 D — SqlPackage（BACPAC エクスポート/インポート）
+### 方式 C — SqlPackage（BACPAC エクスポート/インポート）
 
 **概要**: SqlPackage CLI でオンプレ DB を .bacpac ファイルにエクスポートし、Azure SQL Database にインポートする。
 
@@ -192,9 +170,9 @@ SQL Server 2008 R2（オンプレミス）
 
 ---
 
-### 方式 E — Azure DMS オフライン + SHIR（SQL DB 向け）
+### 方式 D — Azure DMS オフライン + SHIR（SQL DB 向け）
 
-**概要**: SQL MI 向け方式 B と同じ仕組みで、ターゲットを Azure SQL Database にする。DMS がバックアップ取得〜インポートを自動実行。
+**概要**: 方式 B と同じ仕組みで、ターゲットを Azure SQL Database にする。DMS がバックアップ取得〜インポートを自動実行。SHIR はオンプレまたは Azure VNet 内 VM に設置可能。
 
 | 項目 | 内容 |
 |---|---|
@@ -219,7 +197,7 @@ SQL Server 2008 R2（オンプレミス）
 **コスト**
 | リソース | 概算 |
 |---|---|
-| SHIR | 無料 |
+| SHIR | 無料（インストール先 VM のコストは別途） |
 | DMS（Standard SKU） | 〜1〜2 万円/月（移行期間のみ） |
 | Azure SQL Database | 利用量次第 |
 
@@ -230,18 +208,19 @@ SQL Server 2008 R2（オンプレミス）
 
 ---
 
-## 5方式の総合比較
+## 4方式の総合比較
 
-| | A: ネイティブ RESTORE | B: DMS オフライン (MI) | C: LRS | D: SqlPackage | E: DMS オフライン (DB) |
-|---|:---:|:---:|:---:|:---:|:---:|
-| 移行先 | SQL MI | SQL MI | SQL MI | SQL DB | SQL DB |
-| ダウンタイム | 中（数時間〜） | 中（数時間〜） | **小**（数分〜） | 中（数時間〜） | 中（数時間〜） |
-| 複数 DB 一括 | ✗ | **✓** | ✗ | ✗ | **✓** |
-| セットアップ工数 | **低** | 中 | 高 | **最低** | 中 |
-| 進捗の可視化 | SQL クエリ | **Portal** | PowerShell | CLI ログ | **Portal** |
-| 追加コスト | なし | DMS 課金 | なし | なし | DMS 課金 |
-| 難易度 | ★★☆ | ★★★☆ | ★★★★☆ | **★☆** | ★★★☆ |
-| 2008 R2 対応 | ✅ | ✅ | ✅ | ✅ | ✅ |
+| | A: ネイティブ RESTORE | B: DMS オフライン (MI) | C: SqlPackage | D: DMS オフライン (DB) |
+|---|:---:|:---:|:---:|:---:|
+| 移行先 | SQL MI | SQL MI | SQL DB | SQL DB |
+| ダウンタイム | 中（数時間〜） | 中（数時間〜） | 中（数時間〜） | 中（数時間〜） |
+| 複数 DB 一括 | ✗ | **✓** | ✗ | **✓** |
+| セットアップ工数 | **低** | 中 | **最低** | 中 |
+| 進捗の可視化 | SQL クエリ | **Portal** | CLI ログ | **Portal** |
+| 追加コスト | なし | DMS 課金 | なし | DMS 課金 |
+| SHIR 必要 | ✗ | ✓ | ✗ | ✓ |
+| 難易度 | ★★☆ | ★★★☆ | **★☆** | ★★★☆ |
+| 2008 R2 対応 | ✅ | ✅ | ✅ | ✅ |
 
 ---
 
@@ -253,19 +232,14 @@ Q1: 移行先は SQL MI か SQL DB か？
 ├─ SQL Database（機能依存が少ない・コスト重視）
 │       │
 │       Q2: DB 数が複数（3 本以上）あるか？
-│       ├─ No  → 【方式 D】SqlPackage（最もシンプル）
-│       └─ Yes → 【方式 E】DMS オフライン
+│       ├─ No  → 【方式 C】SqlPackage（最もシンプル）
+│       └─ Yes → 【方式 D】DMS オフライン
 │
 └─ SQL Managed Instance（SQL Agent・Linked Server・CLR 等が必要）
         │
-        Q3: ダウンタイムを最小化したいか？
-        ├─ Yes（数分〜数十分に抑えたい） → 【方式 C】LRS
-        │         ※ 完全復旧モデル FULL が前提
-        └─ No（数時間〜1日のダウンタイム許容可）
-                │
-                Q4: DB 数が複数（3 本以上）あるか？
-                ├─ No  → 【方式 A】ネイティブ RESTORE（最もシンプル）
-                └─ Yes → 【方式 B】DMS オフライン（一括移行）
+        Q3: DB 数が複数（3 本以上）あるか？
+        ├─ No  → 【方式 A】ネイティブ RESTORE（最もシンプル）
+        └─ Yes → 【方式 B】DMS オフライン（一括移行）
 ```
 
 ---
@@ -275,10 +249,9 @@ Q1: 移行先は SQL MI か SQL DB か？
 | 移行方式 | SQL 2008 R2 対応 | 主要ツール | ADS 不要 |
 |---|:---:|---|:---:|
 | ネイティブ BACKUP / RESTORE FROM URL（方式 A） | ✅ | SSMS 18.x + AzCopy | ✅ |
-| Azure DMS オフライン + SHIR（方式 B / E） | ✅ | SSMS 18.x + SHIR + Azure Portal | ✅ |
-| LRS（方式 C） | ✅ | Az PowerShell + AzCopy | ✅ |
-| SqlPackage（方式 D） | ✅ | SqlPackage CLI + SSMS 18.x | ✅ |
-| Azure Arc SQL Migration（ポータル統合 UI） | ❌ | — | ✅ |
+| Azure DMS オフライン + SHIR（方式 B / D） | ✅ | SSMS 18.x + SHIR + Azure Portal | ✅ |
+| SqlPackage（方式 C） | ✅ | SqlPackage CLI + SSMS 18.x | ✅ |
+| Azure Arc SQL Migration（ポータル統合 UI） | ❌（2012 以降のみ） | — | ✅ |
 | MI Link（Distributed AG） | ❌（2016 以降のみ） | — | ✅ |
 | DMA スキーマ移行 | ⚠️ 廃止予定 | — | ✅ |
 
@@ -290,9 +263,9 @@ Q1: 移行先は SQL MI か SQL DB か？
 |---|---|
 | SQL Server → SQL MI 移行ガイド | https://learn.microsoft.com/ja-jp/data-migration/sql-server/managed-instance/guide |
 | SQL Server → SQL DB 移行ガイド | https://learn.microsoft.com/ja-jp/data-migration/sql-server/database/guide |
-| LRS による SQL MI 移行 | https://learn.microsoft.com/ja-jp/azure/azure-sql/managed-instance/log-replay-service-migrate |
 | Azure DMS 概要 | https://learn.microsoft.com/ja-jp/azure/dms/dms-overview |
 | DMS でサポートされるシナリオ | https://learn.microsoft.com/ja-jp/azure/dms/resource-scenario-status |
+| セルフホステッド統合ランタイム（SHIR） | https://learn.microsoft.com/ja-jp/azure/data-factory/create-self-hosted-integration-runtime |
 | ADS 廃止後の代替ツール（英語） | https://techcommunity.microsoft.com/blog/microsoftdatamigration/alternatives-after-the-deprecation-of-the-azure-sql-migration-extension-in-azure/4491749 |
 | SqlPackage ダウンロード | https://learn.microsoft.com/ja-jp/sql/tools/sqlpackage/sqlpackage-download |
 | SSMS 18.x ダウンロード | https://learn.microsoft.com/ja-jp/sql/ssms/download-sql-server-management-studio-ssms |

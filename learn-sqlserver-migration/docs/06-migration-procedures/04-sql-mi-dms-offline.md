@@ -26,7 +26,7 @@
 |---|---|
 | 移行元 SQL Server | 2008 R2（互換性レベル 100） |
 | SSMS | 18.x（SQL Server 2008 R2 接続用） |
-| SHIR | バージョン 5.37 以上（オンプレ環境にインストール） |
+| SHIR | バージョン 5.37 以上（オンプレまたは Azure VNet 内 Windows VM にインストール） |
 | Azure DMS | Standard 以上の SKU |
 | Azure Blob Storage | 移行対象 DB と同一リージョン |
 | Azure SQL MI | 作成済み・VNet 接続確認済み |
@@ -56,7 +56,9 @@ EXEC sp_addrolemember 'db_datareader', 'dmsuser';
 
 ### インストール
 1. Azure Portal → Azure Data Factory または DMS のページから SHIR インストーラーをダウンロード
-2. オンプレ Windows サーバーにインストール（SQL Server と別サーバー推奨）
+2. 以下のいずれかの Windows マシンにインストール（SQL Server と同居は非推奨）:
+   - **オンプレの Windows サーバー**（SQL Server と同一ネットワーク内）
+   - **Azure VNet 内の Windows VM**（VPN Gateway / ExpressRoute でオンプレと接続済みであること）
 3. バージョン確認: `5.37 以上`
 
 ### DMS への登録
