@@ -247,3 +247,5 @@ ALTER DATABASE [対象DB名] SET COMPATIBILITY_LEVEL = 130;
 | セルフホステッド統合ランタイム（SHIR） | https://learn.microsoft.com/ja-jp/azure/data-factory/create-self-hosted-integration-runtime |
 | SQL MI の接続アーキテクチャ | https://learn.microsoft.com/ja-jp/azure/azure-sql/managed-instance/connectivity-architecture-overview |
 | SQL MI DMS でサポートされるシナリオ | https://learn.microsoft.com/ja-jp/azure/dms/resource-scenario-status |
+| SSMS 18.x ダウンロード | https://learn.microsoft.com/ja-jp/sql/ssms/download-sql-server-management-studio-ssms |
+| AzCopy v10 | https://learn.microsoft.com/ja-jp/azure/storage/common/storage-use-azcopy-v10 |

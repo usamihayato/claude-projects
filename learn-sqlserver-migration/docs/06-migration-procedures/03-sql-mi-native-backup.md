@@ -207,3 +207,5 @@ ALTER DATABASE [対象DB名] SET COMPATIBILITY_LEVEL = 130; -- SQL Server 2016 �
 | AzCopy v10 | https://learn.microsoft.com/ja-jp/azure/storage/common/storage-use-azcopy-v10 |
 | SAS トークンの作成 | https://learn.microsoft.com/ja-jp/azure/storage/common/storage-sas-overview |
 | SQL MI の接続アーキテクチャ | https://learn.microsoft.com/ja-jp/azure/azure-sql/managed-instance/connectivity-architecture-overview |
+| SSMS 18.x ダウンロード | https://learn.microsoft.com/ja-jp/sql/ssms/download-sql-server-management-studio-ssms |
+| SQL Server → SQL MI 移行ガイド | https://learn.microsoft.com/ja-jp/data-migration/sql-server/managed-instance/guide |

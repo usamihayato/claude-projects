@@ -1,17 +1,23 @@
-# SQL Server 2008 R2（本番2TB）→ Azure SQL Database 移行手順書
-### Azure DMS（Database Migration Service）利用・オフライン移行
+# SQL DB 移行手順 — Azure DMS オフライン移行
+
+> **移行元**: SQL Server 2008 R2（オンプレミス）  
+> **移行先**: Azure SQL Database  
+> **方式**: Azure Database Migration Service（オフライン）+ SHIR  
+> **ダウンタイム**: あり（DMS 移行実行中）  
+> **作成日**: 2026-06-29
 
 ---
 
-## 検証手順書との違い
+## SqlPackage 方式との使い分け
 
-| | 検証手順書 | 本手順書（本番） |
+| 観点 | SqlPackage 方式 | DMS オフライン方式（本手順） |
 |---|---|---|
-| データ量 | ダミー（小） | 本番2TB |
+| 向いている DB サイズ | 単一 DB・中小規模 | 複数 DB・大規模 |
 | 移行ツール | SqlPackage（BACPAC） | Azure DMS |
 | ローカルへの一時ファイル | 必要 | **不要** |
-| SHIR | 不要 | **必要**（オンプレ↔Azure接続用） |
-| 所要時間 | 数分 | 数時間〜1日 |
+| SHIR | 不要 | **必要**（オンプレ↔Azure 接続用） |
+| 複数 DB の一括移行 | 手動繰り返し | ✓ 一括対応 |
+| 移行状況の可視化 | CLI のログのみ | ✓ Azure Portal で進捗確認 |
 
 ---
 
@@ -425,11 +431,11 @@ SELECT COUNT(*) FROM （テーブル名）;
 |---|---|
 | Azure Database Migration Service 概要 | https://learn.microsoft.com/ja-jp/azure/dms/dms-overview |
 | SQL Server → SQL DB（DMS オフライン移行） | https://learn.microsoft.com/ja-jp/data-migration/sql-server/database/database-migration-service |
-| SQL Server → SQL MI（DMS オフライン移行） | https://learn.microsoft.com/ja-jp/data-migration/sql-server/managed-instance/database-migration-service |
 | セルフホステッド統合ランタイム（SHIR） | https://learn.microsoft.com/ja-jp/azure/data-factory/create-self-hosted-integration-runtime |
-| SSMS ダウンロード | https://learn.microsoft.com/ja-jp/sql/ssms/download-sql-server-management-studio-ssms |
+| SSMS 18.x ダウンロード | https://learn.microsoft.com/ja-jp/sql/ssms/download-sql-server-management-studio-ssms |
 | Azure SQL Database Serverless 概要 | https://learn.microsoft.com/ja-jp/azure/azure-sql/database/serverless-tier-overview |
 | ALTER DATABASE 互換性レベル | https://learn.microsoft.com/ja-jp/sql/t-sql/statements/alter-database-transact-sql-compatibility-level |
+| DMS でサポートされるシナリオ | https://learn.microsoft.com/ja-jp/azure/dms/resource-scenario-status |
 
 ---
 
