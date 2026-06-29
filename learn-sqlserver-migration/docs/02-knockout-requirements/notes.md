@@ -238,3 +238,19 @@
 
 **Q. データベースが 20 TB ある。SQL MI に移行できるか？**
 → A. SQL MI（General Purpose）の上限は 16 TB のため不可。Hyperscale（SQL Database）または SQL on VM を選択する必要がある。
+
+---
+
+## 参考リンク
+
+| ドキュメント | URL |
+|---|---|
+| SQL MI と SQL Server の T-SQL 相違点 | https://learn.microsoft.com/ja-jp/azure/azure-sql/managed-instance/transact-sql-tsql-differences-sql-server |
+| Azure SQL 機能比較（MI / DB / VM） | https://learn.microsoft.com/ja-jp/azure/azure-sql/database/features-comparison |
+| SQL MI の接続アーキテクチャ（VNet 要件） | https://learn.microsoft.com/ja-jp/azure/azure-sql/managed-instance/connectivity-architecture-overview |
+| SQL MI サブネットサイズの決定 | https://learn.microsoft.com/ja-jp/azure/azure-sql/managed-instance/vnet-subnet-determine-size |
+| SQL MI での分散トランザクション（MSDTC） | https://learn.microsoft.com/ja-jp/azure/azure-sql/managed-instance/distributed-transaction-coordinator-article |
+| Azure AD 認証（Azure SQL） | https://learn.microsoft.com/ja-jp/azure/azure-sql/database/authentication-aad-overview |
+| 透過的データ暗号化（TDE） | https://learn.microsoft.com/ja-jp/azure/azure-sql/database/transparent-data-encryption-tde-overview |
+| ALTER DATABASE 互換性レベル | https://learn.microsoft.com/ja-jp/sql/t-sql/statements/alter-database-transact-sql-compatibility-level |
+| Database Experimentation Assistant（DEA） | https://learn.microsoft.com/ja-jp/sql/dea/database-experimentation-assistant-overview |

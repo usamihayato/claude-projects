@@ -331,3 +331,18 @@ Synapse Serverless は**スキャンしたデータ量**に対して課金され
 
 **Q. Synapse + ADLS で Cool 階層と Hot 階層はどう使い分けるか？**
 → A. 参照頻度が月 1〜2 回以下なら Cool 階層（¥1.5/GB/月）が安い。ただし Cool 階層はデータ読み出し時に追加料金（¥0.015/GB）が発生するため、頻繁にクエリを実行する場合は Hot 階層（¥2.7/GB/月）が有利になる分岐点を計算すること。
+
+---
+
+## 参考リンク
+
+| ドキュメント | URL |
+|---|---|
+| Azure SQL Managed Instance 料金 | https://azure.microsoft.com/ja-jp/pricing/details/azure-sql-managed-instance/single/ |
+| Azure SQL Database 料金 | https://azure.microsoft.com/ja-jp/pricing/details/azure-sql-database/single/ |
+| Azure SQL Database Serverless 概要 | https://learn.microsoft.com/ja-jp/azure/azure-sql/database/serverless-tier-overview |
+| Azure Hybrid Benefit（ライセンス節約） | https://azure.microsoft.com/ja-jp/pricing/hybrid-benefit/ |
+| Azure Reserved Instances（予約割引） | https://learn.microsoft.com/ja-jp/azure/cost-management-billing/reservations/save-compute-costs-reservations |
+| Azure Data Lake Storage Gen2 料金 | https://azure.microsoft.com/ja-jp/pricing/details/storage/data-lake/ |
+| Azure Synapse Analytics 料金 | https://azure.microsoft.com/ja-jp/pricing/details/synapse-analytics/ |
+| Azure 料金計算ツール | https://azure.microsoft.com/ja-jp/pricing/calculator/ |

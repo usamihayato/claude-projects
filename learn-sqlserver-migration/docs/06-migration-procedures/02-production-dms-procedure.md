@@ -419,5 +419,18 @@ SELECT COUNT(*) FROM （テーブル名）;
 
 ---
 
+## 参考リンク
+
+| ドキュメント | URL |
+|---|---|
+| Azure Database Migration Service 概要 | https://learn.microsoft.com/ja-jp/azure/dms/dms-overview |
+| SQL Server → SQL DB（DMS オフライン移行） | https://learn.microsoft.com/ja-jp/data-migration/sql-server/database/database-migration-service |
+| SQL Server → SQL MI（DMS オフライン移行） | https://learn.microsoft.com/ja-jp/data-migration/sql-server/managed-instance/database-migration-service |
+| セルフホステッド統合ランタイム（SHIR） | https://learn.microsoft.com/ja-jp/azure/data-factory/create-self-hosted-integration-runtime |
+| SSMS ダウンロード | https://learn.microsoft.com/ja-jp/sql/ssms/download-sql-server-management-studio-ssms |
+| Azure SQL Database Serverless 概要 | https://learn.microsoft.com/ja-jp/azure/azure-sql/database/serverless-tier-overview |
+| ALTER DATABASE 互換性レベル | https://learn.microsoft.com/ja-jp/sql/t-sql/statements/alter-database-transact-sql-compatibility-level |
+
+---
+
 *作成日：2026-06-22*
-*参考：https://learn.microsoft.com/ja-jp/data-migration/sql-server/database/database-migration-service*

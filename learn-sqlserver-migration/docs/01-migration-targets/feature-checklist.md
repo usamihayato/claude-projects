@@ -284,4 +284,20 @@ ORDER BY j.name;
 
 ---
 
+## 参考リンク
+
+| ドキュメント | URL |
+|---|---|
+| SQL MI と SQL Server の T-SQL 相違点 | https://learn.microsoft.com/ja-jp/azure/azure-sql/managed-instance/transact-sql-tsql-differences-sql-server |
+| Azure SQL 機能比較（MI / DB / VM） | https://learn.microsoft.com/ja-jp/azure/azure-sql/database/features-comparison |
+| sys.configurations（カタログビュー） | https://learn.microsoft.com/ja-jp/sql/relational-databases/system-catalog-views/sys-configurations-transact-sql |
+| sys.servers（カタログビュー） | https://learn.microsoft.com/ja-jp/sql/relational-databases/system-catalog-views/sys-servers-transact-sql |
+| sys.assemblies（カタログビュー） | https://learn.microsoft.com/ja-jp/sql/relational-databases/system-catalog-views/sys-assemblies-transact-sql |
+| sys.databases（カタログビュー） | https://learn.microsoft.com/ja-jp/sql/relational-databases/system-catalog-views/sys-databases-transact-sql |
+| sys.sql_modules（カタログビュー） | https://learn.microsoft.com/ja-jp/sql/relational-databases/system-catalog-views/sys-sql-modules-transact-sql |
+| sys.change_tracking_databases | https://learn.microsoft.com/ja-jp/sql/relational-databases/system-catalog-views/change-tracking-catalog-views-sys-change-tracking-databases |
+| Azure AD 認証（Azure SQL） | https://learn.microsoft.com/ja-jp/azure/azure-sql/database/authentication-aad-overview |
+
+---
+
 *作成日：2026-06-23*

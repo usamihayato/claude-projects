@@ -227,3 +227,20 @@ Q1: xp_cmdshell / OS コマンド実行が必要か？
 
 **Q. Windows Server のライセンスを SQL MI に移行後も活用したいが？**
 → A. Azure Hybrid Benefit（AHB）により既存の SQL Server ライセンスを SQL MI に適用可能。Windows Server ライセンスは AHB で Azure VM に流用可能（SQL MI 自体は OS 管理不要のため適用先は VM）。
+
+---
+
+## 参考リンク
+
+| ドキュメント | URL |
+|---|---|
+| Azure SQL Managed Instance 概要 | https://learn.microsoft.com/ja-jp/azure/azure-sql/managed-instance/sql-managed-instance-paas-overview |
+| Azure SQL Database 概要 | https://learn.microsoft.com/ja-jp/azure/azure-sql/database/sql-database-paas-overview |
+| SQL Server on Azure VM 概要 | https://learn.microsoft.com/ja-jp/azure/azure-sql/virtual-machines/windows/sql-server-on-azure-vm-iaas-what-is-overview |
+| Azure Synapse Analytics 概要 | https://learn.microsoft.com/ja-jp/azure/synapse-analytics/overview-what-is |
+| Synapse Serverless SQL Pool 概要 | https://learn.microsoft.com/ja-jp/azure/synapse-analytics/sql/on-demand-workspace-overview |
+| Azure Data Lake Storage Gen2 概要 | https://learn.microsoft.com/ja-jp/azure/storage/blobs/data-lake-storage-introduction |
+| SQL Server 移行ガイド（全体） | https://learn.microsoft.com/ja-jp/data-migration/sql-server/ |
+| SQL Server → SQL MI 移行ガイド | https://learn.microsoft.com/ja-jp/data-migration/sql-server/managed-instance/guide |
+| SQL Server → SQL DB 移行ガイド | https://learn.microsoft.com/ja-jp/data-migration/sql-server/database/guide |
+| Azure Hybrid Benefit | https://azure.microsoft.com/ja-jp/pricing/hybrid-benefit/ |

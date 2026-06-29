@@ -351,4 +351,18 @@ SET COMPATIBILITY_LEVEL = 100;
 
 ---
 
+## 参考リンク
+
+| ドキュメント | URL |
+|---|---|
+| SSMS ダウンロード | https://learn.microsoft.com/ja-jp/sql/ssms/download-sql-server-management-studio-ssms |
+| SqlPackage Export | https://learn.microsoft.com/ja-jp/sql/tools/sqlpackage/sqlpackage-export |
+| SqlPackage Import | https://learn.microsoft.com/ja-jp/sql/tools/sqlpackage/sqlpackage-import |
+| SqlPackage CLI リファレンス | https://learn.microsoft.com/ja-jp/sql/tools/sqlpackage/sqlpackage |
+| Azure SQL Database Serverless 概要 | https://learn.microsoft.com/ja-jp/azure/azure-sql/database/serverless-tier-overview |
+| ALTER DATABASE 互換性レベル | https://learn.microsoft.com/ja-jp/sql/t-sql/statements/alter-database-transact-sql-compatibility-level |
+| SQL Server → SQL DB 移行チュートリアル | https://learn.microsoft.com/ja-jp/data-migration/sql-server/database/guide |
+
+---
+
 *作成日：2026-06-22*
