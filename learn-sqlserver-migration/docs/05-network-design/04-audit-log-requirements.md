@@ -18,12 +18,14 @@
 
 ## 仕様確認（SQL MI の監査ログ動作）
 
+> **出典**: [SQL Server Audit - Azure SQL MI](https://learn.microsoft.com/en-us/azure/azure-sql/managed-instance/auditing?view=azuresql) / [監査の構成 - Azure SQL MI](https://learn.microsoft.com/en-us/azure/azure-sql/managed-instance/auditing-configure?view=azuresql)
+
 ### 送信先の2系統
 
-| 設定方法 | 送信先 | SQL クエリ | 用途 |
-|---|---|---|---|
-| **T-SQL（SQL Server Audit）** | ローカル .sqlaudit ファイル | ✅ `fn_get_audit_file` | 短期・即時参照 |
-| **Azure Portal（Azure 監査）** | Blob / Log Analytics / Event Hubs | ❌（KQL のみ） | 長期保管・外部連携 |
+| 設定方法 | 送信先 | ファイル形式 | SQL クエリ | 用途 |
+|---|---|---|---|---|
+| **T-SQL（SQL Server Audit）** | ローカル | `.sqlaudit` | ✅ `fn_get_audit_file` | 短期・即時参照 |
+| **Azure Portal（Azure 監査）** | Blob / Log Analytics / Event Hubs | `.xel`（Blob）| ❌（KQL のみ） | 長期保管・外部連携 |
 
 > 両系統は独立しており、**同時に有効化できる**。  
 > Blob に転送してもローカルへの書き込みは止まらない（個別に設定が必要）。
@@ -141,3 +143,17 @@ Azure Portal
 - [ ] Blob 長期保管の保持期間の確定（コンプライアンス要件確認）
 - [ ] `xp_cmdshell` の使用可否確認（代替手段の検討）
 - [ ] 監査対象イベントの定義（ログイン失敗 / DDL / DML 等）
+
+---
+
+## 参考リンク
+
+| ドキュメント | URL |
+|---|---|
+| SQL Server Audit（SQL MI） | https://learn.microsoft.com/en-us/azure/azure-sql/managed-instance/auditing?view=azuresql |
+| 監査の構成（SQL MI） | https://learn.microsoft.com/en-us/azure/azure-sql/managed-instance/auditing-configure?view=azuresql |
+| VNet・FW 背後のストレージへの監査書き込み | https://learn.microsoft.com/en-us/azure/azure-sql/database/audit-write-storage-account-behind-vnet-firewall?view=azuresql |
+| 監査ログの分析 | https://learn.microsoft.com/en-us/azure/azure-sql/database/auditing-analyze-audit-logs?view=azuresql |
+| 診断ログのストリーミングエクスポート | https://learn.microsoft.com/en-us/azure/azure-sql/database/metrics-diagnostic-telemetry-logging-streaming-export-configure?view=azuresql |
+| Blob Storage ライフサイクル管理 | https://learn.microsoft.com/ja-jp/azure/storage/blobs/lifecycle-management-overview |
+| fn_get_audit_file | https://learn.microsoft.com/ja-jp/sql/relational-databases/system-functions/sys-fn-get-audit-file-transact-sql |
