@@ -97,6 +97,9 @@ METASTORE_PASS="<任意のパスワード>"   # 後で owlmanage.sh encrypt で�
 
 #### ULIMIT 設定
 
+> **公式要件**: `nofile` を **4096 以上**に設定すること（[Upgrade requirements](https://productresources.collibra.com/docs/collibra/dqc/latest/Content/DataQuality/Installation/Upgrade/ref_upgrade-requirements.htm) より）  
+> 以下は余裕を持たせた 65536 を設定しているが、4096 でも公式要件を満たす。
+
 ```bash
 # 現在値を確認
 ulimit -n
@@ -105,14 +108,12 @@ ulimit -n
 sudo tee -a /etc/security/limits.conf <<'EOF'
 * soft nofile 65536
 * hard nofile 65536
-* soft nproc 65536
-* hard nproc 65536
 EOF
 
 # 設定反映のためシェルを再起動
 exec bash -l
 
-# 確認（65536 であること）
+# 確認
 ulimit -n
 ```
 
