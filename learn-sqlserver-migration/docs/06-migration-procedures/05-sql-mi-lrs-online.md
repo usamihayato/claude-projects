@@ -1,65 +1,53 @@
-# SQL Server 2008 R2（本番2TB）→ Azure SQL Managed Instance 移行手順書（2026年版）
+# SQL MI 移行手順 — LRS（Log Replay Service）オンライン移行
+
+> **移行元**: SQL Server 2008 R2（オンプレミス）  
+> **移行先**: Azure SQL Managed Instance  
+> **方式**: Log Replay Service（LRS）— Blob Storage 経由のログ継続適用  
+> **ダウンタイム**: カットオーバー時のみ（数分〜数十分）  
+> **作成日**: 2026-06-29
+
+> ℹ️ 移行方式の選定・ツール変更の背景は [00-summary.md](./00-summary.md) を参照
 
 ---
 
-## ⚠️ 2026年のツール変更について（重要）
+## LRS とは
 
-2026年2月28日以降、移行ツールの状況が大きく変わっています。
+Blob Storage に置いたバックアップファイルを SQL MI が継続的に読み取り・適用するサービス。  
+フルバックアップ後もログバックアップを追加し続けることでオンプレの変更を追従し、  
+準備が整ったタイミングでカットオーバーを実行する。
 
-| ツール | 現在の状況 |
-|---|---|
-| Azure Data Studio (ADS) | **2026年2月28日に廃止済み** |
-| Azure SQL Migration extension for ADS | **ADS廃止に伴い廃止済み** |
-| DMA (Data Migration Assistant) | **廃止予定（移行推奨）** |
-| Azure Arc SQL Migration（ポータル統合 UI） | ✅ 現在の最新推奨 — **ただし SQL Server 2012 以降のみ対応** |
-| **ネイティブ BACKUP/RESTORE FROM URL** | ✅ **SQL Server 2008 R2 で確実に動作する公式サポート方式** |
-| LRS（Log Replay Service）PowerShell 版 | ✅ オンライン移行の代替候補（後述） |
+**前提**: 完全復旧モデル（FULL）が必要
 
-> **今回のケース（SQL Server 2008 R2）への影響**
-> Azure Arc ポータル統合の移行 UI は SQL Server 2012 以降を必要とするため、2008 R2 では使用できません。
-> Microsoft 公式移行ガイドでは、SQL Server 2012 SP1 CU2 より前のバージョンには
-> 「.bak ファイルを直接 Azure Storage にアップロードして RESTORE FROM URL」を推奨しています。
+## オフライン方式との比較
 
----
-
-## 移行方式の比較
-
-| | **オフライン（推奨）** ネイティブ BACKUP / RESTORE FROM URL | **オンライン** LRS（PowerShell） |
+| | **オフライン** ネイティブ RESTORE | **オンライン（本手順）** LRS |
 |---|---|---|
-| ダウンタイム | バックアップ＋アップロード＋リストア時間（数時間〜1日） | カットオーバー時のみ（数分〜数十分） |
-| 必要ツール | SSMS・AzCopy | PowerShell（Az モジュール）・AzCopy |
-| 手順の複雑さ | **低**（シンプル） | 中（ログバックアップの継続管理が必要） |
-| SQL Server 2008 R2 対応 | ✅ 完全対応 | ✅ 対応（完全復旧モデルが必要） |
-| Arc 必要性 | 不要 | 不要 |
-| 推奨ケース | ダウンタイムを許容できる | ダウンタイムを最小限にしたい |
+| ダウンタイム | バックアップ〜リストア完了まで（数時間〜） | カットオーバー時のみ（数分〜数十分） |
+| 必要ツール | SSMS + AzCopy | PowerShell（Az モジュール）+ AzCopy |
+| 手順の複雑さ | 低 | 中（ログバックアップの継続管理が必要） |
+| SQL 2008 R2 対応 | ✅ | ✅（FULL 復旧モデルが必要） |
+| おすすめ | ダウンタイム許容できる | 24 時間稼働・ダウンタイム最小化したい |
 
 ---
 
 ## 全体の流れ
 
 ```
-【共通事前準備フェーズ】
+【事前準備フェーズ】
 STEP 1   事前確認（互換性レベル・復旧モデル・データサイズ）← SSMS でオンプレ実行
 STEP 2   VNet・SQL MI 専用サブネットの作成               ← Azure ポータル
 STEP 3   Azure SQL Managed Instance の作成               ← Azure ポータル（数時間）
 STEP 4   Azure Blob Storage の作成・SAS トークン取得      ← Azure ポータル
 
-【移行実行フェーズ（方式で分岐）】
-────── オフライン（ネイティブ RESTORE） ────────────────────────
-STEP 5A  フルバックアップ取得（WITH CHECKSUM）
-STEP 6A  AzCopy で Blob Storage にアップロード
-STEP 7A  SQL MI に接続 → SAS 認証情報の作成 → RESTORE DATABASE FROM URL
-STEP 8A  リストア進捗の監視
+【移行実行フェーズ（LRS）】
+STEP 5   完全復旧モデルへの変更確認
+STEP 6   フルバックアップ + 差分バックアップの取得
+STEP 7   バックアップを Blob Storage にアップロード
+STEP 8   LRS を PowerShell で開始
+STEP 9   ログバックアップを定期取得・アップロード（カットオーバーまで継続）
+STEP 10  カットオーバー実行
 
-────── オンライン（LRS：Log Replay Service） ──────────────────
-STEP 5B  完全復旧モデルへの変更確認
-STEP 6B  フルバックアップ + 差分バックアップの取得
-STEP 7B  バックアップを Blob Storage にアップロード
-STEP 8B  LRS を PowerShell で開始
-STEP 9B  ログバックアップを定期取得・アップロード（移行中継続）
-STEP 10B カットオーバー実行
-
-【確認・切り替えフェーズ（共通）】
+【確認・切り替えフェーズ】
 STEP 11  動作確認（件数突合・クエリ確認）
 STEP 12  READ_ONLY 設定（参照専用運用のため）
 STEP 13  後片付け（不要リソース削除）
@@ -247,123 +235,7 @@ VNet (vnet-sqlmi-prod)
 
 ---
 
-## オフライン移行（STEP 5A〜8A）：ネイティブ BACKUP / RESTORE FROM URL（推奨）
-
-## STEP 5A｜フルバックアップの取得
-
-SSMS または sqlcmd でオンプレ SQL Server に接続して実行します。
-
-```sql
-BACKUP DATABASE [（移行対象のDB名）]
-TO DISK = N'D:\backup\（DB名）_full.bak'
-WITH
-    COMPRESSION,
-    CHECKSUM,
-    STATS = 10;
-GO
-```
-
-> ⚠️ **`WITH CHECKSUM` は後の RESTORE でバックアップの整合性検証に使用されます。必ず付けてください。**
-
-> **2TB バックアップの所要時間目安**
-> ディスク I/O 性能により、圧縮込みで 2〜6 時間程度を想定してください。
-
----
-
-## STEP 6A｜AzCopy で Blob Storage にアップロード
-
-### AzCopy のインストール
-
-```
-https://learn.microsoft.com/ja-jp/azure/storage/common/storage-use-azcopy-v10
-```
-
-### アップロード実行
-
-```cmd
-azcopy copy "D:\backup\（DB名）_full.bak" ^
-  "https://（ストレージアカウント名）.blob.core.windows.net/sqlmi-migration/（DB名）_full.bak?（SASトークン）"
-```
-
-> **アップロード時間の目安（1Gbps 帯域）**
-> 圧縮後ファイルが 1TB 程度の場合、2〜3 時間程度。バックグラウンドで実行し完了を確認してから次へ進みます。
-
----
-
-## STEP 7A｜SQL MI で RESTORE DATABASE FROM URL を実行
-
-SSMS から SQL MI に接続します。
-
-**接続先**: `（SQL MI名）.（ユニークID）.database.windows.net`（ポータルの「概要」で確認）
-
-### ① SAS 認証情報の作成（SQL MI 上で実行）
-
-```sql
--- SQL MI の master に接続して実行
-CREATE CREDENTIAL [https://（ストレージアカウント名）.blob.core.windows.net/sqlmi-migration]
-WITH IDENTITY = 'SHARED ACCESS SIGNATURE',
-     SECRET = '（SASトークン の先頭 ? を除いた部分）';
-GO
-```
-
-> `SECRET` には SAS トークンの先頭の `?` を取り除いた文字列を指定します。
-> 例：`sv=2023-01-03&ss=b&srt=co&sp=rwdlacuptfx&...`
-
-### ② リストアの実行
-
-```sql
-RESTORE DATABASE [（DB名）]
-FROM URL = N'https://（ストレージアカウント名）.blob.core.windows.net/sqlmi-migration/（DB名）_full.bak'
-WITH STATS = 10;
-GO
-```
-
-> **リストアは非同期で実行されます。**
-> コマンドを実行したあとに接続が切れたりタイムアウトになっても、SQL MI はバックグラウンドでリストアを継続します。
-> 次の STEP 8A で進捗を確認してください。
-
----
-
-## STEP 8A｜リストア進捗の監視
-
-SQL MI に接続し、以下のクエリで進捗を確認します。
-
-```sql
--- リストアの進捗確認
-SELECT
-    r.session_id,
-    r.command,
-    r.percent_complete,
-    r.estimated_completion_time / 1000 AS 残り秒数,
-    r.start_time
-FROM sys.dm_exec_requests r
-WHERE r.command = 'RESTORE DATABASE';
-```
-
-```sql
--- 操作ステータスの確認（完了・エラーの確認用）
-SELECT *
-FROM sys.dm_operation_status
-WHERE resource_type_desc = 'Database'
-ORDER BY start_time DESC;
-```
-
-> `state_desc` が `SUCCEEDED` になればリストア完了です。
-
-> **2TB リストアの所要時間目安**
-> SQL MI の vCore 数によりますが、8 vCore で 4〜12 時間程度を見込んでください。
-
----
-
-## オンライン移行（STEP 5B〜10B）：LRS（Log Replay Service）PowerShell 版
-
-> **LRS とは**
-> Blob Storage に置いたバックアップファイルを SQL MI が継続的に読み取り・適用するサービスです。
-> ログバックアップを追加し続けることでオンプレの変更を追従し、準備できたらカットオーバーします。
->
-> ⚠️ **前提**: 完全復旧モデル（FULL）が必要です。
-
-## STEP 5B｜完全復旧モデルへの変更確認
+## STEP 5｜完全復旧モデルへの変更確認
 
 STEP 1 で `SIMPLE` と確認された場合は変更します。すでに `FULL` の場合はスキップ。
 
@@ -381,7 +253,7 @@ GO
 
 ---
 
-## STEP 6B｜フルバックアップ + 差分バックアップの取得
+## STEP 6｜フルバックアップ + 差分バックアップの取得
 
 ```sql
 -- フルバックアップ
@@ -399,7 +271,7 @@ GO
 
 ---
 
-## STEP 7B｜バックアップを Blob Storage にアップロード
+## STEP 7｜バックアップを Blob Storage にアップロード
 
 LRS はフォルダー構造で DB 単位に管理します。
 コンテナー内に **DB 名と同じサブフォルダー** を作成してアップロードします。
@@ -416,7 +288,7 @@ azcopy copy "D:\backup\（DB名）_diff.bak" ^
 
 ---
 
-## STEP 8B｜LRS を PowerShell で開始
+## STEP 8｜LRS を PowerShell で開始
 
 PowerShell で Az モジュールをインストール済みであることを前提とします。
 
@@ -440,7 +312,7 @@ Start-AzSqlInstanceDatabaseLogReplay @params
 
 ---
 
-## STEP 9B｜ログバックアップを定期取得・アップロード（カットオーバーまで継続）
+## STEP 9｜ログバックアップを定期取得・アップロード（カットオーバーまで継続）
 
 LRS が動作している間、ログバックアップを定期的に取得して Blob Storage にアップロードします。
 
@@ -478,7 +350,7 @@ Get-AzSqlInstanceDatabaseLogReplay `
 
 ---
 
-## STEP 10B｜カットオーバーの実行
+## STEP 10｜カットオーバーの実行
 
 ### ① アプリケーションの接続を停止
 

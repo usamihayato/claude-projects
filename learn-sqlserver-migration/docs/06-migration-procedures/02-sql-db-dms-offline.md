@@ -1,61 +1,41 @@
-# SQL Server 2008 R2（本番2TB）→ Azure SQL Database 移行手順書（2026年版更新）
+# SQL DB 移行手順 — Azure DMS オフライン移行
 
-## Azure Database Migration Service（新ポータル UI）利用・オフライン移行
-
----
-
-> **⚠️ 本手順書の位置づけ（2026年6月時点）**
->
-> 本プロジェクトでは移行先を **Azure SQL Managed Instance** に変更しました。
-> SQL MI 向け手順書は [03-production-sqlmi-procedure.md](03-production-sqlmi-procedure.md) を参照してください。
->
-> 本ファイルは **Azure SQL Database への移行手順の参考資料** として残します。
+> **移行元**: SQL Server 2008 R2（オンプレミス）  
+> **移行先**: Azure SQL Database  
+> **方式**: Azure Database Migration Service（オフライン）+ SHIR  
+> **ダウンタイム**: あり（DMS 移行実行中）  
+> **作成日**: 2026-06-29
 
 ---
 
-## ⚠️ 2026年のツール変更について
+## SqlPackage 方式との使い分け
 
-| ツール | 現在の状況 |
-|---|---|
-| Azure Data Studio (ADS) | **2026年2月28日に廃止済み** |
-| Azure SQL Migration extension for ADS | **ADS廃止に伴い廃止済み** |
-| DMA (Data Migration Assistant) | **廃止予定（移行推奨）** |
-| Azure DMS（クラシック）SQL Server シナリオ | **2026年3月15日に廃止済み** |
-| **Azure DMS（新ポータル UI）** | ✅ 継続中（本手順書で使用） |
-
-> **オンライン移行について**
-> Azure SQL Database ターゲットへのオンライン移行は、Azure DMS では **現在も非対応** です。
-> オフライン移行のみ利用可能です（アプリ接続を停止してから移行を開始します）。
-
----
-
-## 検証手順書との違い
-
-| | 検証手順書 | 本手順書（本番） |
+| 観点 | SqlPackage 方式 | DMS オフライン方式（本手順） |
 |---|---|---|
-| データ量 | ダミー（小） | 本番2TB |
-| 移行ツール | SqlPackage（BACPAC） | Azure DMS（新ポータル UI） |
+| 向いている DB サイズ | 単一 DB・中小規模 | 複数 DB・大規模 |
+| 移行ツール | SqlPackage（BACPAC） | Azure DMS |
 | ローカルへの一時ファイル | 必要 | **不要** |
-| SHIR | 不要 | **必要**（オンプレ↔Azure接続用） |
-| 所要時間 | 数分 | 数時間〜1日 |
+| SHIR | 不要 | **必要**（オンプレ↔Azure 接続用） |
+| 複数 DB の一括移行 | 手動繰り返し | ✓ 一括対応 |
+| 移行状況の可視化 | CLI のログのみ | ✓ Azure Portal で進捗確認 |
 
 ---
 
 ## 全体の流れ
 
 ```
-STEP 1   互換性レベルを確認（オンプレで実施）
-STEP 2   Azure SQL Database を作成（移行先・高スペックで用意）
-STEP 3   Azure Storage Account を作成
-STEP 4   DataMigration リソースプロバイダーを登録
-STEP 5   Azure DMS インスタンスを作成（新 UI）
-STEP 6   SHIR をオンプレPCにインストール・登録
-STEP 7   移行プロジェクトを作成・実行（新ウィザード）
-STEP 8   進捗を監視
-STEP 9   動作確認
-STEP 10  サーバレスにスケールダウン
-STEP 11  READ_ONLY設定
-STEP 12  後片付け（不要リソース削除）
+STEP 1  互換性レベルを確認（オンプレで実施）
+STEP 2  Azure SQL Database を作成（移行先・高スペックで用意）
+STEP 3  Azure Storage Account を作成
+STEP 4  DataMigration リソースプロバイダーを登録
+STEP 5  Azure DMS インスタンスを作成
+STEP 6  SHIR をインストール・登録（オンプレまたは Azure VNet 内 VM）
+STEP 7  移行プロジェクトを作成・実行
+STEP 8  進捗を監視
+STEP 9  動作確認
+STEP 10 サーバレスにスケールダウン
+STEP 11 READ_ONLY設定
+STEP 12 後片付け（不要リソース削除）
 ```
 
 ---
@@ -206,19 +186,28 @@ AzureサブスクリプションでDMSを使えるようにする**一回だけ�
 
 ---
 
-## STEP 6｜SHIR をオンプレPCにインストール・登録
+## STEP 6｜SHIR をインストール・登録
 
-### SHIRとは？
+### SHIR とは？
 
-オンプレのSQL ServerとAzure DMSを繋ぐ橋渡し役のソフトウェアです。
+オンプレの SQL Server と Azure DMS を繋ぐ橋渡し役のソフトウェアです。
 
 ```
 オンプレ SQL Server 2008 R2
-        ↕（SHIR経由）
+        ↕（TCP 1433）
+   SHIR（Windows マシン）
+        ↕（TCP 443）
 Azure DMS
         ↕
 Azure SQL Database（移行先）
 ```
+
+**SHIR のインストール場所**: ソース SQL Server に TCP 1433 で到達でき、かつ Azure に TCP 443 で通信できる Windows マシンであれば OK。
+
+| 設置場所 | 条件 |
+|---|---|
+| オンプレ Windows サーバー | SQL Server と同一ネットワーク内 |
+| Azure VNet 内の Windows VM | VPN Gateway / ExpressRoute でオンプレと接続済み |
 
 ### ダウンロード・インストール
 
@@ -226,7 +215,7 @@ Azure SQL Database（移行先）
 https://aka.ms/sql-migration-shir-download
 ```
 
-バージョン **5.37以上** をダウンロードしてインストールします。
+バージョン **5.37以上** をダウンロードし、上記いずれかのマシンにインストールします。
 
 ### 登録キーの取得
 
@@ -234,7 +223,7 @@ https://aka.ms/sql-migration-shir-download
 2. 「設定」→「統合ランタイム」を選択
 3. 「統合ランタイムの構成」→ 表示される **「認証キー1」をコピー**
 
-### オンプレPCでSHIRを登録
+### SHIR を登録
 
 1. インストールした `Microsoft Integration Runtime Configuration Manager` を起動
 2. 「認証キーを使用してIntegration Runtimeを登録する」を選択
@@ -432,7 +421,7 @@ INSERT INTO （テーブル名） VALUES (...);
 |---|---|
 | Azure DMS インスタンス | ✅ **削除する**（課金対象） |
 | Azure Storage Account | ✅ **削除する** |
-| SHIR（オンプレPC上） | ✅ アンインストール |
+| SHIR（インストールしたマシン上） | ✅ アンインストール |
 | Azure SQL Database | 🔒 **残す**（本番運用リソース） |
 | リソースグループ | 🔒 **残す**（管理用） |
 
@@ -506,6 +495,18 @@ SELECT COUNT(*) FROM （テーブル名）;
 
 ---
 
+## 参考リンク
+
+| ドキュメント | URL |
+|---|---|
+| Azure Database Migration Service 概要 | https://learn.microsoft.com/ja-jp/azure/dms/dms-overview |
+| SQL Server → SQL DB（DMS オフライン移行） | https://learn.microsoft.com/ja-jp/data-migration/sql-server/database/database-migration-service |
+| セルフホステッド統合ランタイム（SHIR） | https://learn.microsoft.com/ja-jp/azure/data-factory/create-self-hosted-integration-runtime |
+| SSMS 18.x ダウンロード | https://learn.microsoft.com/ja-jp/sql/ssms/download-sql-server-management-studio-ssms |
+| Azure SQL Database Serverless 概要 | https://learn.microsoft.com/ja-jp/azure/azure-sql/database/serverless-tier-overview |
+| ALTER DATABASE 互換性レベル | https://learn.microsoft.com/ja-jp/sql/t-sql/statements/alter-database-transact-sql-compatibility-level |
+| DMS でサポートされるシナリオ | https://learn.microsoft.com/ja-jp/azure/dms/resource-scenario-status |
+
+---
+
 *作成日：2026-06-22*
-*更新日：2026-06-26（ツール変更対応）*
-*参考：https://learn.microsoft.com/ja-jp/data-migration/sql-server/database/database-migration-service*
