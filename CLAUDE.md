@@ -49,13 +49,20 @@ claude-projects/
 │               ├── aks-design.md
 │               ├── aks-aro-comparison.md
 │               └── helm.md
-└── learn-sqlserver-migration/                     ← SQL Server クラウド移行調査プロジェクト
-    ├── CLAUDE.md
-    └── docs/
-        ├── 01-migration-targets/
-        ├── 02-knockout-requirements/
-        ├── 03-adms/
-        └── 04-cost-analysis/
+├── learn-sqlserver-migration/                     ← SQL Server クラウド移行調査プロジェクト
+│   ├── CLAUDE.md
+│   └── docs/
+│       ├── 01-migration-targets/
+│       ├── 02-knockout-requirements/
+│       ├── 03-adms/
+│       └── 04-cost-analysis/
+└── data-governance/
+    └── catalog/                                    ← 区分値カタログ整備プロジェクト（データガバナンス高度化）
+        ├── CLAUDE.md
+        └── docs/
+            ├── 01-direction/                        ← 方向性の整理資料
+            ├── 02-data-transformation/              ← データ変換方針
+            └── 03-schema-design/                    ← テーブル・スキーマ・DB構成の設計（DDL含む）
 ```
 
 ---
@@ -67,6 +74,7 @@ claude-projects/
 | `learn-oci/` | Oracle Cloud Infrastructure (OCI) 学習用プロジェクト | OCI 資格試験対策、インフラ設計 |
 | `learn-collibra-data-quality-and-observablity/` | Collibra Data Quality & Observability 導入調査 | Azure VM（Standalone）上での DQ Agent + Spark 構築 |
 | `learn-sqlserver-migration/` | SQL Server クラウド移行調査 | SQL MI / DMS / ノックアウト要件 / コスト最適化 |
+| `data-governance/catalog/` | 区分値カタログ整備（データガバナンス高度化） | 区分値・列名の名寄せ、メダリオンアーキテクチャ、Snowflake |
 
 ---
 
