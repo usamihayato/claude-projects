@@ -13,7 +13,9 @@ CREATE TABLE IF NOT EXISTS DG_CATALOG.GOLD.DIM_COLUMN_MASTER (
     TABLE_PHYSICAL_NAME   VARCHAR(200)    NOT NULL,
     COLUMN_PHYSICAL_NAME  VARCHAR(200)    NOT NULL,
     COLUMN_LOGICAL_NAME   VARCHAR(500)    NOT NULL,          -- 確定した論理名（業務名）
-    COLUMN_DESCRIPTION    VARCHAR(1000),
+    DATA_TYPE              VARCHAR(100),                     -- 列のデータ型（実データカタログの形式に合わせて保持）
+    COLUMN_DESCRIPTION    VARCHAR(1000),                      -- 人手による説明文
+    CODE_VALUE_SUMMARY     VARCHAR(4000),                     -- DIM_CODE_VALUE_MASTERから機械生成した区分値要約（例: 01: ABCD, 02: EFGH）
     VALID_FROM            DATE            NOT NULL,
     VALID_TO              DATE,                              -- NULL = 現在有効
     IS_CURRENT             BOOLEAN         DEFAULT TRUE,

@@ -43,7 +43,7 @@ CREATE TABLE IF NOT EXISTS DG_CATALOG.META.COLLECTION_BATCH (
 CREATE TABLE IF NOT EXISTS DG_CATALOG.BRONZE.RAW_COLUMN_DEFINITION (
     RAW_ID                    NUMBER          AUTOINCREMENT PRIMARY KEY,
     BATCH_ID                  NUMBER          REFERENCES DG_CATALOG.META.COLLECTION_BATCH(BATCH_ID),
-    SOURCE_TYPE                VARCHAR(20)     NOT NULL,     -- 設計書 / ソースコード / 画面定義
+    SOURCE_TYPE                VARCHAR(20)     NOT NULL,     -- 設計書 / ソースコード / 画面定義 / コードマスタ(Excel)
     SOURCE_IDENTIFIER          VARCHAR(500)    NOT NULL,     -- ファイルパス／リポジトリ名／ドキュメント名
     SOURCE_LOCATION            VARCHAR(500),                 -- シート名／行番号／クラス名など詳細位置
     SOURCE_VERSION             VARCHAR(200),                 -- ドキュメントバージョン／コミットハッシュ
@@ -61,7 +61,7 @@ CREATE TABLE IF NOT EXISTS DG_CATALOG.BRONZE.RAW_COLUMN_DEFINITION (
 CREATE TABLE IF NOT EXISTS DG_CATALOG.BRONZE.RAW_CODE_VALUE_DEFINITION (
     RAW_ID                    NUMBER          AUTOINCREMENT PRIMARY KEY,
     BATCH_ID                  NUMBER          REFERENCES DG_CATALOG.META.COLLECTION_BATCH(BATCH_ID),
-    SOURCE_TYPE                VARCHAR(20)     NOT NULL,     -- 設計書 / ソースコード / 画面定義
+    SOURCE_TYPE                VARCHAR(20)     NOT NULL,     -- 設計書 / ソースコード / 画面定義 / コードマスタ(Excel)
     SOURCE_IDENTIFIER          VARCHAR(500)    NOT NULL,
     SOURCE_LOCATION            VARCHAR(500),
     SOURCE_VERSION             VARCHAR(200),

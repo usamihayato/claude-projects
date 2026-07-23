@@ -40,7 +40,7 @@
 |---|---|---|
 | RAW_ID | NUMBER | PK |
 | BATCH_ID | NUMBER | FK: `META.COLLECTION_BATCH` |
-| SOURCE_TYPE | VARCHAR | `設計書` / `ソースコード` / `画面定義` |
+| SOURCE_TYPE | VARCHAR | `設計書` / `ソースコード` / `画面定義` / `コードマスタ(Excel)` |
 | SOURCE_IDENTIFIER | VARCHAR | ファイルパス／リポジトリ名／ドキュメント名 |
 | SOURCE_LOCATION | VARCHAR | シート名／行番号／クラス名など詳細位置 |
 | SOURCE_VERSION | VARCHAR | ドキュメントバージョン／コミットハッシュ |
@@ -57,7 +57,7 @@
 |---|---|---|
 | RAW_ID | NUMBER | PK |
 | BATCH_ID | NUMBER | FK: `META.COLLECTION_BATCH` |
-| SOURCE_TYPE | VARCHAR | `設計書` / `ソースコード` / `画面定義` |
+| SOURCE_TYPE | VARCHAR | `設計書` / `ソースコード` / `画面定義` / `コードマスタ(Excel)` |
 | SOURCE_IDENTIFIER | VARCHAR | ファイルパス／リポジトリ名／ドキュメント名 |
 | SOURCE_LOCATION | VARCHAR | シート名／行番号／クラス名など詳細位置 |
 | SOURCE_VERSION | VARCHAR | ドキュメントバージョン／コミットハッシュ |
@@ -120,7 +120,9 @@
 | TABLE_PHYSICAL_NAME | VARCHAR | 対象テーブル物理名 |
 | COLUMN_PHYSICAL_NAME | VARCHAR | 対象列物理名 |
 | COLUMN_LOGICAL_NAME | VARCHAR | 確定した論理名（業務名） |
-| COLUMN_DESCRIPTION | VARCHAR | 列の説明 |
+| DATA_TYPE | VARCHAR | 列のデータ型（実データカタログの形式に合わせて保持） |
+| COLUMN_DESCRIPTION | VARCHAR | 列の説明（人手による説明文） |
+| CODE_VALUE_SUMMARY | VARCHAR | `DIM_CODE_VALUE_MASTER` の現在有効なレコードから機械的に生成した区分値要約（例：`01: ABCD, 02: EFGH`）。区分値マスタの更新時に同一バッチ内で再生成する。`COLUMN_DESCRIPTION` とは別カラムとして保持し、最終的な表示形式は利用者側の成果物選択に委ねる |
 | VALID_FROM | DATE | 有効開始日 |
 | VALID_TO | DATE | 有効終了日（現在有効な場合は `NULL`） |
 | IS_CURRENT | BOOLEAN | 現在有効なレコードかどうか |
