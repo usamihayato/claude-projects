@@ -34,13 +34,17 @@ catalog/
     │   └── 01-overview.md                     ← 目標・背景・課題・推進アプローチの整理資料
     ├── 02-data-transformation/
     │   └── 01-conversion-policy.md            ← データ変換方針（抽出ルール・名寄せルール・更新運用）
-    └── 03-schema-design/
-        ├── 01-architecture.md                 ← メダリオンアーキテクチャ全体設計
-        ├── 02-table-definitions.md            ← Bronze/Silver/Gold 各テーブルのスキーマ定義
-        └── ddl/
-            ├── 01_bronze.sql                  ← Bronze層 DDL（Snowflake）
-            ├── 02_silver.sql                  ← Silver層 DDL（Snowflake）
-            └── 03_gold.sql                    ← Gold層 DDL（Snowflake）
+    ├── 03-schema-design/
+    │   ├── 01-architecture.md                 ← メダリオンアーキテクチャ全体設計
+    │   ├── 02-table-definitions.md            ← Bronze/Silver/Gold 各テーブルのスキーマ定義
+    │   └── ddl/
+    │       ├── 01_bronze.sql                  ← Bronze層 DDL（Snowflake）
+    │       ├── 02_silver.sql                  ← Silver層 DDL（Snowflake）
+    │       └── 03_gold.sql                    ← Gold層 DDL（Snowflake）
+    └── 04-pipeline/
+        ├── 00-overview.md                     ← パイプライン全体設計（Stage→Bronze→Silver）
+        ├── 01-stage-to-bronze.sql             ← Stage→Bronze 取り込みプロシージャ（Snowflake）
+        └── 02-bronze-to-silver.sql            ← Bronze→Silver 名寄せプロシージャ（Snowflake）
 ```
 
 ## 前提・制約
