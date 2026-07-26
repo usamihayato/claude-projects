@@ -6,61 +6,8 @@
 -- ============================================================================
 
 -- ============================================================================
--- 1. ファイルフォーマット定義
--- ============================================================================
-
--- 列名定義・区分値定義の CSV 用フォーマット（設計書・コードマスタ由来）
-CREATE FILE FORMAT IF NOT EXISTS DG_CATALOG.BRONZE.FF_COLUMN_DEF_CSV
-    TYPE = 'CSV'
-    FIELD_DELIMITER = ','
-    RECORD_DELIMITER = '\n'
-    SKIP_HEADER = 1
-    FIELD_OPTIONALLY_ENCLOSED_BY = '"'
-    NULL_IF = ('', 'NULL')
-    EMPTY_FIELD_AS_NULL = TRUE
-    ENCODING = 'UTF8'
-    ERROR_ON_COLUMN_COUNT_MISMATCH = FALSE;
-
-CREATE FILE FORMAT IF NOT EXISTS DG_CATALOG.BRONZE.FF_CODE_VALUE_CSV
-    TYPE = 'CSV'
-    FIELD_DELIMITER = ','
-    RECORD_DELIMITER = '\n'
-    SKIP_HEADER = 1
-    FIELD_OPTIONALLY_ENCLOSED_BY = '"'
-    NULL_IF = ('', 'NULL')
-    EMPTY_FIELD_AS_NULL = TRUE
-    ENCODING = 'UTF8'
-    ERROR_ON_COLUMN_COUNT_MISMATCH = FALSE;
-
--- AI 抽出結果（ソースコード・画面定義由来）の JSON 用フォーマット
-CREATE FILE FORMAT IF NOT EXISTS DG_CATALOG.BRONZE.FF_EXTRACTION_JSON
-    TYPE = 'JSON'
-    STRIP_OUTER_ARRAY = TRUE
-    ENABLE_OCTAL = FALSE
-    ALLOW_DUPLICATE = FALSE;
-
--- ============================================================================
--- 2. 内部ステージ定義
--- ============================================================================
-
--- 列名定義ファイル用ステージ
-CREATE STAGE IF NOT EXISTS DG_CATALOG.BRONZE.STG_COLUMN_DEF_FILES
-    FILE_FORMAT = DG_CATALOG.BRONZE.FF_COLUMN_DEF_CSV
-    COMMENT = '列名定義の抽出結果ファイルを配置するステージ';
-
--- 区分値定義ファイル用ステージ
-CREATE STAGE IF NOT EXISTS DG_CATALOG.BRONZE.STG_CODE_VALUE_DEF_FILES
-    FILE_FORMAT = DG_CATALOG.BRONZE.FF_CODE_VALUE_CSV
-    COMMENT = '区分値定義の抽出結果ファイルを配置するステージ';
-
--- AI 抽出結果ファイル用ステージ
-CREATE STAGE IF NOT EXISTS DG_CATALOG.BRONZE.STG_EXTRACTION_JSON_FILES
-    FILE_FORMAT = DG_CATALOG.BRONZE.FF_EXTRACTION_JSON
-    COMMENT = 'AI抽出結果（JSON）ファイルを配置するステージ';
-
-
--- ============================================================================
--- 3. ファイルアップロード例（SnowSQL / クライアントから実行）
+-- 1. ファイルアップロード例（SnowSQL / クライアントから実行）
+--    ファイルフォーマット・ステージ定義は 03-schema-design/ddl/01_bronze.sql を参照
 -- ============================================================================
 
 -- 列名定義 CSV のアップロード
@@ -79,7 +26,7 @@ CREATE STAGE IF NOT EXISTS DG_CATALOG.BRONZE.STG_EXTRACTION_JSON_FILES
 
 
 -- ============================================================================
--- 4. Stage → Bronze 取り込みプロシージャ（CSV: 列名定義）
+-- 2. Stage → Bronze 取り込みプロシージャ（CSV: 列名定義）
 -- ============================================================================
 
 CREATE OR REPLACE PROCEDURE DG_CATALOG.BRONZE.SP_LOAD_COLUMN_DEF_FROM_STAGE(
@@ -168,7 +115,7 @@ $$;
 
 
 -- ============================================================================
--- 5. Stage → Bronze 取り込みプロシージャ（CSV: 区分値定義）
+-- 3. Stage → Bronze 取り込みプロシージャ（CSV: 区分値定義）
 -- ============================================================================
 
 CREATE OR REPLACE PROCEDURE DG_CATALOG.BRONZE.SP_LOAD_CODE_VALUE_DEF_FROM_STAGE(
@@ -262,7 +209,7 @@ $$;
 
 
 -- ============================================================================
--- 6. Stage → Bronze 取り込みプロシージャ（JSON: AI 抽出結果）
+-- 4. Stage → Bronze 取り込みプロシージャ（JSON: AI 抽出結果）
 --    ソースコード・画面定義からの AI 抽出結果を Bronze へ展開する
 -- ============================================================================
 
@@ -404,7 +351,7 @@ $$;
 
 
 -- ============================================================================
--- 7. 一括実行プロシージャ（全ステージの取り込みをまとめて実行）
+-- 5. 一括実行プロシージャ（全ステージの取り込みをまとめて実行）
 -- ============================================================================
 
 CREATE OR REPLACE PROCEDURE DG_CATALOG.BRONZE.SP_LOAD_ALL_FROM_STAGE(
@@ -432,7 +379,7 @@ $$;
 
 
 -- ============================================================================
--- 8. 実行例
+-- 6. 実行例
 -- ============================================================================
 
 -- (1) 事前準備: 収集対象システムの登録

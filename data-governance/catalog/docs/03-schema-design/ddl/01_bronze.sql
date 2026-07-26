@@ -76,3 +76,57 @@ CREATE TABLE IF NOT EXISTS DG_CATALOG.BRONZE.RAW_CODE_VALUE_DEFINITION (
     EXTRACTED_AT               TIMESTAMP_NTZ,
     CREATED_AT                 TIMESTAMP_NTZ   DEFAULT CURRENT_TIMESTAMP()
 );
+
+-- ----------------------------------------------------------------------------
+-- BRONZE: ファイルフォーマット定義
+-- ----------------------------------------------------------------------------
+
+-- 列名定義 CSV 用（設計書・コードマスタ由来）
+CREATE FILE FORMAT IF NOT EXISTS DG_CATALOG.BRONZE.FF_COLUMN_DEF_CSV
+    TYPE = 'CSV'
+    FIELD_DELIMITER = ','
+    RECORD_DELIMITER = '\n'
+    SKIP_HEADER = 1
+    FIELD_OPTIONALLY_ENCLOSED_BY = '"'
+    NULL_IF = ('', 'NULL')
+    EMPTY_FIELD_AS_NULL = TRUE
+    ENCODING = 'UTF8'
+    ERROR_ON_COLUMN_COUNT_MISMATCH = FALSE;
+
+-- 区分値定義 CSV 用（設計書・コードマスタ由来）
+CREATE FILE FORMAT IF NOT EXISTS DG_CATALOG.BRONZE.FF_CODE_VALUE_CSV
+    TYPE = 'CSV'
+    FIELD_DELIMITER = ','
+    RECORD_DELIMITER = '\n'
+    SKIP_HEADER = 1
+    FIELD_OPTIONALLY_ENCLOSED_BY = '"'
+    NULL_IF = ('', 'NULL')
+    EMPTY_FIELD_AS_NULL = TRUE
+    ENCODING = 'UTF8'
+    ERROR_ON_COLUMN_COUNT_MISMATCH = FALSE;
+
+-- AI 抽出結果 JSON 用（ソースコード・画面定義由来）
+CREATE FILE FORMAT IF NOT EXISTS DG_CATALOG.BRONZE.FF_EXTRACTION_JSON
+    TYPE = 'JSON'
+    STRIP_OUTER_ARRAY = TRUE
+    ENABLE_OCTAL = FALSE
+    ALLOW_DUPLICATE = FALSE;
+
+-- ----------------------------------------------------------------------------
+-- BRONZE: 内部ステージ定義
+-- ----------------------------------------------------------------------------
+
+-- 列名定義ファイル用ステージ
+CREATE STAGE IF NOT EXISTS DG_CATALOG.BRONZE.STG_COLUMN_DEF_FILES
+    FILE_FORMAT = DG_CATALOG.BRONZE.FF_COLUMN_DEF_CSV
+    COMMENT = '列名定義の抽出結果ファイルを配置するステージ';
+
+-- 区分値定義ファイル用ステージ
+CREATE STAGE IF NOT EXISTS DG_CATALOG.BRONZE.STG_CODE_VALUE_DEF_FILES
+    FILE_FORMAT = DG_CATALOG.BRONZE.FF_CODE_VALUE_CSV
+    COMMENT = '区分値定義の抽出結果ファイルを配置するステージ';
+
+-- AI 抽出結果ファイル用ステージ
+CREATE STAGE IF NOT EXISTS DG_CATALOG.BRONZE.STG_EXTRACTION_JSON_FILES
+    FILE_FORMAT = DG_CATALOG.BRONZE.FF_EXTRACTION_JSON
+    COMMENT = 'AI抽出結果（JSON）ファイルを配置するステージ';
