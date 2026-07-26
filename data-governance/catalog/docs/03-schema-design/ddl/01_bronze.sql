@@ -78,6 +78,24 @@ CREATE TABLE IF NOT EXISTS DG_CATALOG.BRONZE.RAW_CODE_VALUE_DEFINITION (
 );
 
 -- ----------------------------------------------------------------------------
+-- BRONZE: Excel生データの Landing テーブル
+--   Excel のシートを CSV 化してそのまま取り込む。
+--   シートごとの列構成が異なるため VARIANT で1行まるごと保持する。
+--   ここから Bronze 構造化テーブル（RAW_COLUMN_DEFINITION / RAW_CODE_VALUE_DEFINITION）
+--   への変換は別途パイプライン（04-pipeline）で実施する。
+-- ----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS DG_CATALOG.BRONZE.LANDING_RAW_FILE (
+    LANDING_ID                NUMBER          AUTOINCREMENT PRIMARY KEY,
+    BATCH_ID                  NUMBER          REFERENCES DG_CATALOG.META.COLLECTION_BATCH(BATCH_ID),
+    FILE_NAME                 VARCHAR(500)    NOT NULL,     -- ステージ上のファイル名（例: excel_T_CLAIM_20260726_Sheet1.csv）
+    SHEET_NAME                VARCHAR(200),                 -- 元の Excel シート名（ファイル名から判別、または手動指定）
+    ROW_NUMBER                NUMBER,                       -- CSV 内の行番号（ヘッダ除く、1始まり）
+    RAW_COLUMNS               VARIANT         NOT NULL,     -- 1行分の全カラムを JSON 配列として保持（例: ["val1","val2",...]）
+    RAW_HEADER                VARIANT,                      -- ヘッダ行（1行目）を JSON 配列として保持（バッチ内の最初のレコードにのみ格納でも可）
+    LOADED_AT                 TIMESTAMP_NTZ   DEFAULT CURRENT_TIMESTAMP()
+);
+
+-- ----------------------------------------------------------------------------
 -- BRONZE: ファイルフォーマット定義
 -- ----------------------------------------------------------------------------
 
@@ -105,6 +123,18 @@ CREATE FILE FORMAT IF NOT EXISTS DG_CATALOG.BRONZE.FF_CODE_VALUE_CSV
     ENCODING = 'UTF8'
     ERROR_ON_COLUMN_COUNT_MISMATCH = FALSE;
 
+-- Landing 用 CSV（Excel シートをそのまま取り込み。ヘッダなし・列数不定）
+CREATE FILE FORMAT IF NOT EXISTS DG_CATALOG.BRONZE.FF_LANDING_CSV
+    TYPE = 'CSV'
+    FIELD_DELIMITER = ','
+    RECORD_DELIMITER = '\n'
+    SKIP_HEADER = 0
+    FIELD_OPTIONALLY_ENCLOSED_BY = '"'
+    NULL_IF = ('', 'NULL')
+    EMPTY_FIELD_AS_NULL = TRUE
+    ENCODING = 'UTF8'
+    ERROR_ON_COLUMN_COUNT_MISMATCH = FALSE;
+
 -- AI 抽出結果 JSON 用（ソースコード・画面定義由来）
 CREATE FILE FORMAT IF NOT EXISTS DG_CATALOG.BRONZE.FF_EXTRACTION_JSON
     TYPE = 'JSON'
@@ -125,6 +155,11 @@ CREATE STAGE IF NOT EXISTS DG_CATALOG.BRONZE.STG_COLUMN_DEF_FILES
 CREATE STAGE IF NOT EXISTS DG_CATALOG.BRONZE.STG_CODE_VALUE_DEF_FILES
     FILE_FORMAT = DG_CATALOG.BRONZE.FF_CODE_VALUE_CSV
     COMMENT = '区分値定義の抽出結果ファイルを配置するステージ';
+
+-- Landing 用ステージ（Excel → CSV をそのまま配置）
+CREATE STAGE IF NOT EXISTS DG_CATALOG.BRONZE.STG_LANDING_FILES
+    FILE_FORMAT = DG_CATALOG.BRONZE.FF_LANDING_CSV
+    COMMENT = 'Excel由来のCSVファイルをそのまま配置するステージ（Landing用）';
 
 -- AI 抽出結果ファイル用ステージ
 CREATE STAGE IF NOT EXISTS DG_CATALOG.BRONZE.STG_EXTRACTION_JSON_FILES

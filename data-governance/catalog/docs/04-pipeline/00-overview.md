@@ -8,25 +8,38 @@
 
 ```
 [収集対象システム]
-  ・設計書（Excel/CSV）
-  ・ソースコード（JSON抽出結果）
-  ・画面定義（JSON抽出結果）
-  ・コードマスタ(Excel → CSV変換)
+  ・コードマスタ(Excel)           ─┐
+  ・設計書（Excel/CSV）            │ Excel → シートごとに CSV 化
+  ・画面定義（JSON抽出結果）       │
+  ・ソースコード（JSON抽出結果）  ─┘
         │
-        │  ファイルアップロード（PUT / 外部ステージ連携）
+        │  ファイルアップロード（PUT）
         ▼
 ┌──────────────────────────────────────────────────┐
 │ Snowflake Internal Stage                          │
-│   @DG_CATALOG.BRONZE.STG_COLUMN_DEF_FILES         │
-│   @DG_CATALOG.BRONZE.STG_CODE_VALUE_DEF_FILES     │
 │                                                    │
-│   ファイルフォーマット:                            │
-│     FF_COLUMN_DEF_CSV  … 列名定義（CSV）           │
-│     FF_CODE_VALUE_CSV  … 区分値定義（CSV）          │
-│     FF_EXTRACTION_JSON … AI抽出結果（JSON）         │
+│   @DG_CATALOG.BRONZE.STG_LANDING_FILES    ← 推奨  │
+│     Excel 生データ CSV をそのまま配置              │
+│     FF_LANDING_CSV（ヘッダなし・列数不定）         │
+│                                                    │
+│   @DG_CATALOG.BRONZE.STG_COLUMN_DEF_FILES          │
+│   @DG_CATALOG.BRONZE.STG_CODE_VALUE_DEF_FILES      │
+│     構造化済み CSV を直接取り込む場合に使用         │
+│                                                    │
+│   @DG_CATALOG.BRONZE.STG_EXTRACTION_JSON_FILES     │
+│     AI抽出結果（JSON）                              │
 └──────────────────────────────────────────────────┘
         │
-        │  COPY INTO（01-stage-to-bronze.sql）
+        │  SP_LOAD_TO_LANDING（そのまま取り込み）
+        ▼
+┌──────────────────────────────────────────────────┐
+│ Landing（BRONZE.LANDING_RAW_FILE）                 │
+│   Excel の各行を VARIANT でそのまま保持            │
+│   ファイル名・シート名・行番号・ヘッダ付き        │
+└──────────────────────────────────────────────────┘
+        │
+        │  SP_LANDING_TO_BRONZE_CODE_VALUE
+        │  （カラム位置を指定して構造化）
         ▼
 ┌──────────────────────────────────────────────────┐
 │ Bronze層                                          │
@@ -51,7 +64,9 @@
 
 | ステップ | バッチ種別 | 実行頻度（想定） | 概要 |
 |---|---|---|---|
-| Stage → Bronze | `収集` | 週次 | ステージ上のファイルを Bronze テーブルへ COPY INTO |
+| Stage → Landing | `収集` | 週次 | Excel 生データ CSV を Landing テーブルへそのまま格納 |
+| Landing → Bronze | `収集` | Landing 取り込み後 | カラム位置を指定して Bronze 構造にマッピング |
+| Stage → Bronze（直接） | `収集` | 任意 | 構造化済み CSV / JSON を Bronze へ直接 COPY INTO |
 | Bronze → Silver | `名寄せ` | 収集バッチ完了後に自動起動 | Bronze レコードをグルーピング・名寄せして Silver へ MERGE |
 | Silver → Gold | `昇格` | 名寄せバッチ完了後（自動昇格 + レビュー後確定） | 別ドキュメントで設計予定 |
 
@@ -61,6 +76,12 @@ Stage にアップロードするファイルは以下の命名規約に従う�
 
 ### 3.1 命名フォーマット
 
+Landing 用（Excel 生データ）：
+```
+<ソース種別プレフィックス>_<テーブル物理名>_<YYYYMMDD>_<シート名>.<拡張子>
+```
+
+構造化済み CSV / JSON（直接取り込み）：
 ```
 <ソース種別プレフィックス>_<テーブル物理名>_<YYYYMMDD>.<拡張子>
 ```

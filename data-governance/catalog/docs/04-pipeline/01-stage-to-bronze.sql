@@ -10,23 +10,230 @@
 --    ファイルフォーマット・ステージ定義は 03-schema-design/ddl/01_bronze.sql を参照
 -- ============================================================================
 
--- 列名定義 CSV のアップロード
+-- Excel 生データ CSV のアップロード（Landing 用）
+-- PUT file:///path/to/excel_T_CLAIM_20260726_Sheet1.csv @DG_CATALOG.BRONZE.STG_LANDING_FILES AUTO_COMPRESS=TRUE;
+
+-- 列名定義 CSV のアップロード（構造化済みの場合）
 -- PUT file:///path/to/column_definitions.csv @DG_CATALOG.BRONZE.STG_COLUMN_DEF_FILES AUTO_COMPRESS=TRUE;
 
--- 区分値定義 CSV のアップロード
+-- 区分値定義 CSV のアップロード（構造化済みの場合）
 -- PUT file:///path/to/code_value_definitions.csv @DG_CATALOG.BRONZE.STG_CODE_VALUE_DEF_FILES AUTO_COMPRESS=TRUE;
 
 -- AI 抽出結果 JSON のアップロード
 -- PUT file:///path/to/extraction_results.json @DG_CATALOG.BRONZE.STG_EXTRACTION_JSON_FILES AUTO_COMPRESS=TRUE;
 
 -- ステージ上のファイル確認
--- LIST @DG_CATALOG.BRONZE.STG_COLUMN_DEF_FILES;
--- LIST @DG_CATALOG.BRONZE.STG_CODE_VALUE_DEF_FILES;
--- LIST @DG_CATALOG.BRONZE.STG_EXTRACTION_JSON_FILES;
+-- LIST @DG_CATALOG.BRONZE.STG_LANDING_FILES;
 
 
 -- ============================================================================
--- 2. Stage → Bronze 取り込みプロシージャ（CSV: 列名定義）
+-- 2. Stage → Landing 取り込みプロシージャ（Excel 生データのそのまま取り込み）
+--    Excel の各シートを CSV 化したファイルを、行ごとに VARIANT で Landing へ格納する。
+--    シート名はファイル名から推定する（例: excel_T_CLAIM_20260726_Sheet1.csv → Sheet1）
+-- ============================================================================
+
+CREATE OR REPLACE PROCEDURE DG_CATALOG.BRONZE.SP_LOAD_TO_LANDING(
+    P_SOURCE_SYSTEM_ID NUMBER,
+    P_FILE_PATTERN     VARCHAR DEFAULT '.*\\.csv'
+)
+RETURNS VARCHAR
+LANGUAGE SQL
+AS
+$$
+DECLARE
+    V_BATCH_ID NUMBER;
+    V_ROW_COUNT NUMBER;
+BEGIN
+    -- バッチレコード作成
+    INSERT INTO DG_CATALOG.META.COLLECTION_BATCH (
+        BATCH_TYPE, SOURCE_SYSTEM_ID, STARTED_AT, STATUS
+    ) VALUES (
+        '収集', :P_SOURCE_SYSTEM_ID, CURRENT_TIMESTAMP(), '実行中'
+    );
+
+    SET V_BATCH_ID = (
+        SELECT MAX(BATCH_ID)
+        FROM DG_CATALOG.META.COLLECTION_BATCH
+        WHERE BATCH_TYPE = '収集'
+          AND SOURCE_SYSTEM_ID = :P_SOURCE_SYSTEM_ID
+    );
+
+    -- ステージ上の CSV を1行ずつ VARIANT 化して Landing へ格納
+    -- METADATA$FILENAME でファイル名、METADATA$FILE_ROW_NUMBER で行番号を取得
+    INSERT INTO DG_CATALOG.BRONZE.LANDING_RAW_FILE (
+        BATCH_ID,
+        FILE_NAME,
+        SHEET_NAME,
+        ROW_NUMBER,
+        RAW_COLUMNS,
+        LOADED_AT
+    )
+    SELECT
+        :V_BATCH_ID,
+        METADATA$FILENAME,
+        -- ファイル名末尾からシート名を推定（excel_T_CLAIM_20260726_Sheet1.csv → Sheet1）
+        REGEXP_SUBSTR(METADATA$FILENAME, '_([^_]+)\\.csv', 1, 1, 'e'),
+        METADATA$FILE_ROW_NUMBER,
+        -- 全カラムを配列にまとめて VARIANT 化（最大100列分を想定）
+        ARRAY_CONSTRUCT_COMPACT(
+            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+            $11, $12, $13, $14, $15, $16, $17, $18, $19, $20,
+            $21, $22, $23, $24, $25, $26, $27, $28, $29, $30
+        ),
+        CURRENT_TIMESTAMP()
+    FROM @DG_CATALOG.BRONZE.STG_LANDING_FILES
+        (FILE_FORMAT => 'DG_CATALOG.BRONZE.FF_LANDING_CSV', PATTERN => :P_FILE_PATTERN);
+
+    -- ヘッダ行（ROW_NUMBER = 1）を RAW_HEADER として反映
+    UPDATE DG_CATALOG.BRONZE.LANDING_RAW_FILE dst
+    SET dst.RAW_HEADER = hdr.RAW_COLUMNS
+    FROM (
+        SELECT FILE_NAME, RAW_COLUMNS
+        FROM DG_CATALOG.BRONZE.LANDING_RAW_FILE
+        WHERE BATCH_ID = :V_BATCH_ID
+          AND ROW_NUMBER = 1
+    ) hdr
+    WHERE dst.BATCH_ID = :V_BATCH_ID
+      AND dst.FILE_NAME = hdr.FILE_NAME;
+
+    SET V_ROW_COUNT = (
+        SELECT COUNT(*)
+        FROM DG_CATALOG.BRONZE.LANDING_RAW_FILE
+        WHERE BATCH_ID = :V_BATCH_ID
+    );
+
+    UPDATE DG_CATALOG.META.COLLECTION_BATCH
+    SET COMPLETED_AT = CURRENT_TIMESTAMP(),
+        STATUS = '成功',
+        REMARKS = 'Landing取り込み件数: ' || :V_ROW_COUNT::VARCHAR
+    WHERE BATCH_ID = :V_BATCH_ID;
+
+    RETURN 'Landing取り込み完了。BATCH_ID=' || :V_BATCH_ID::VARCHAR || ', 件数=' || :V_ROW_COUNT::VARCHAR;
+
+EXCEPTION
+    WHEN OTHER THEN
+        UPDATE DG_CATALOG.META.COLLECTION_BATCH
+        SET COMPLETED_AT = CURRENT_TIMESTAMP(),
+            STATUS = '失敗',
+            REMARKS = SQLERRM
+        WHERE BATCH_ID = :V_BATCH_ID;
+        RAISE;
+END;
+$$;
+
+
+-- ============================================================================
+-- 3. Landing → Bronze 変換プロシージャ（区分値定義）
+--    Landing の生データを、ヘッダ行のカラム位置に基づいて
+--    RAW_CODE_VALUE_DEFINITION の構造にマッピングする。
+--
+--    マッピング定義はプロシージャ引数でカラム位置（1始まり）を指定する。
+--    Excel のシート構成に応じて呼び出し側で指定を変える。
+-- ============================================================================
+
+CREATE OR REPLACE PROCEDURE DG_CATALOG.BRONZE.SP_LANDING_TO_BRONZE_CODE_VALUE(
+    P_LANDING_BATCH_ID       NUMBER,       -- Landing 取り込み時の BATCH_ID
+    P_SOURCE_SYSTEM_ID       NUMBER,
+    P_SOURCE_TYPE            VARCHAR,       -- 例: 'コードマスタ(Excel)'
+    P_SOURCE_IDENTIFIER      VARCHAR,       -- 例: 'code_master_v2.xlsx'
+    P_TABLE_PHYSICAL_NAME    VARCHAR,       -- 対象テーブル物理名
+    P_COLUMN_PHYSICAL_NAME   VARCHAR,       -- 対象カラム物理名
+    P_SHEET_NAME             VARCHAR,       -- 対象シート名（NULL なら全シート）
+    P_COL_CODE_VALUE         NUMBER,        -- コード値が入っている列位置（1始まり）
+    P_COL_CODE_LABEL         NUMBER,        -- 表示ラベルが入っている列位置
+    P_COL_CODE_DESCRIPTION   NUMBER DEFAULT NULL  -- 説明列の位置（なければ NULL）
+)
+RETURNS VARCHAR
+LANGUAGE SQL
+AS
+$$
+DECLARE
+    V_BATCH_ID NUMBER;
+    V_ROW_COUNT NUMBER;
+BEGIN
+    -- Bronze 投入用のバッチレコード
+    INSERT INTO DG_CATALOG.META.COLLECTION_BATCH (
+        BATCH_TYPE, SOURCE_SYSTEM_ID, STARTED_AT, STATUS
+    ) VALUES (
+        '収集', :P_SOURCE_SYSTEM_ID, CURRENT_TIMESTAMP(), '実行中'
+    );
+
+    SET V_BATCH_ID = (
+        SELECT MAX(BATCH_ID)
+        FROM DG_CATALOG.META.COLLECTION_BATCH
+        WHERE BATCH_TYPE = '収集'
+          AND SOURCE_SYSTEM_ID = :P_SOURCE_SYSTEM_ID
+    );
+
+    INSERT INTO DG_CATALOG.BRONZE.RAW_CODE_VALUE_DEFINITION (
+        BATCH_ID,
+        SOURCE_TYPE,
+        SOURCE_IDENTIFIER,
+        SOURCE_LOCATION,
+        SOURCE_VERSION,
+        TABLE_PHYSICAL_NAME,
+        COLUMN_PHYSICAL_NAME,
+        CONTEXT_COLUMN_NAME_RAW,
+        CONTEXT_VALUE_RAW,
+        CODE_VALUE,
+        CODE_LABEL_RAW,
+        CODE_DESCRIPTION_RAW,
+        RAW_CONTENT,
+        EXTRACTED_AT
+    )
+    SELECT
+        :V_BATCH_ID,
+        :P_SOURCE_TYPE,
+        :P_SOURCE_IDENTIFIER,
+        COALESCE(l.SHEET_NAME, 'unknown') || ':Row' || l.ROW_NUMBER::VARCHAR,
+        NULL,
+        :P_TABLE_PHYSICAL_NAME,
+        :P_COLUMN_PHYSICAL_NAME,
+        NULL,  -- コンテキスト（初回は NULL）
+        NULL,
+        l.RAW_COLUMNS[:P_COL_CODE_VALUE - 1]::VARCHAR,     -- 0始まりインデックスに変換
+        l.RAW_COLUMNS[:P_COL_CODE_LABEL - 1]::VARCHAR,
+        CASE WHEN :P_COL_CODE_DESCRIPTION IS NOT NULL
+             THEN l.RAW_COLUMNS[:P_COL_CODE_DESCRIPTION - 1]::VARCHAR
+             ELSE NULL
+        END,
+        l.RAW_COLUMNS,  -- 行全体を VARIANT で保持
+        CURRENT_TIMESTAMP()
+    FROM DG_CATALOG.BRONZE.LANDING_RAW_FILE l
+    WHERE l.BATCH_ID = :P_LANDING_BATCH_ID
+      AND l.ROW_NUMBER > 1   -- ヘッダ行を除外
+      AND l.RAW_COLUMNS[:P_COL_CODE_VALUE - 1] IS NOT NULL  -- コード値が空の行を除外
+      AND (:P_SHEET_NAME IS NULL OR l.SHEET_NAME = :P_SHEET_NAME);
+
+    SET V_ROW_COUNT = (
+        SELECT COUNT(*)
+        FROM DG_CATALOG.BRONZE.RAW_CODE_VALUE_DEFINITION
+        WHERE BATCH_ID = :V_BATCH_ID
+    );
+
+    UPDATE DG_CATALOG.META.COLLECTION_BATCH
+    SET COMPLETED_AT = CURRENT_TIMESTAMP(),
+        STATUS = '成功',
+        REMARKS = 'Landing→Bronze変換: ' || :V_ROW_COUNT::VARCHAR || '件'
+    WHERE BATCH_ID = :V_BATCH_ID;
+
+    RETURN 'Landing→Bronze変換完了。BATCH_ID=' || :V_BATCH_ID::VARCHAR || ', 件数=' || :V_ROW_COUNT::VARCHAR;
+
+EXCEPTION
+    WHEN OTHER THEN
+        UPDATE DG_CATALOG.META.COLLECTION_BATCH
+        SET COMPLETED_AT = CURRENT_TIMESTAMP(),
+            STATUS = '失敗',
+            REMARKS = SQLERRM
+        WHERE BATCH_ID = :V_BATCH_ID;
+        RAISE;
+END;
+$$;
+
+
+-- ============================================================================
+-- 4. Stage → Bronze 取り込みプロシージャ（CSV: 列名定義）
+--    ※ 構造化済み CSV を直接取り込む場合に使用（Landing 経由ではない）
 -- ============================================================================
 
 CREATE OR REPLACE PROCEDURE DG_CATALOG.BRONZE.SP_LOAD_COLUMN_DEF_FROM_STAGE(
@@ -115,7 +322,8 @@ $$;
 
 
 -- ============================================================================
--- 3. Stage → Bronze 取り込みプロシージャ（CSV: 区分値定義）
+-- 5. Stage → Bronze 取り込みプロシージャ（CSV: 区分値定義）
+--    ※ 構造化済み CSV を直接取り込む場合に使用（Landing 経由ではない）
 -- ============================================================================
 
 CREATE OR REPLACE PROCEDURE DG_CATALOG.BRONZE.SP_LOAD_CODE_VALUE_DEF_FROM_STAGE(
@@ -209,7 +417,7 @@ $$;
 
 
 -- ============================================================================
--- 4. Stage → Bronze 取り込みプロシージャ（JSON: AI 抽出結果）
+-- 6. Stage → Bronze 取り込みプロシージャ（JSON: AI 抽出結果）
 --    ソースコード・画面定義からの AI 抽出結果を Bronze へ展開する
 -- ============================================================================
 
@@ -351,7 +559,7 @@ $$;
 
 
 -- ============================================================================
--- 5. 一括実行プロシージャ（全ステージの取り込みをまとめて実行）
+-- 7. 一括実行プロシージャ（全ステージの取り込みをまとめて実行）
 -- ============================================================================
 
 CREATE OR REPLACE PROCEDURE DG_CATALOG.BRONZE.SP_LOAD_ALL_FROM_STAGE(
@@ -379,27 +587,64 @@ $$;
 
 
 -- ============================================================================
--- 6. 実行例
+-- 8. 実行例
 -- ============================================================================
 
--- (1) 事前準備: 収集対象システムの登録
+-- ========================================
+-- パターンA: Excel → Landing → Bronze（推奨。Excel をそのまま取り込む場合）
+-- ========================================
+
+-- (A1) 事前準備: 収集対象システムの登録
 -- INSERT INTO DG_CATALOG.META.SOURCE_SYSTEM (SOURCE_SYSTEM_NAME, REPOSITORY_URL, OWNER)
 -- VALUES ('画面あり業務システムA', 'https://git.example.com/system-a', '業務部門X');
 
--- (2) ファイルアップロード（SnowSQL）
--- PUT file:///data/extracts/column_defs_20260723.csv @DG_CATALOG.BRONZE.STG_COLUMN_DEF_FILES;
--- PUT file:///data/extracts/code_value_defs_20260723.csv @DG_CATALOG.BRONZE.STG_CODE_VALUE_DEF_FILES;
--- PUT file:///data/extracts/ai_extraction_20260723.json @DG_CATALOG.BRONZE.STG_EXTRACTION_JSON_FILES;
+-- (A2) Excel の各シートを CSV 化してアップロード
+--      ファイル名規約: excel_<テーブル名>_<日付>_<シート名>.csv
+-- PUT file:///data/excel_T_CLAIM_20260726_コード一覧.csv @DG_CATALOG.BRONZE.STG_LANDING_FILES AUTO_COMPRESS=TRUE;
 
--- (3) 取り込み実行（個別）
+-- (A3) Landing へ取り込み（Excel 生データをそのまま格納）
+-- CALL DG_CATALOG.BRONZE.SP_LOAD_TO_LANDING(1);
+
+-- (A4) Landing の中身を確認（ヘッダ行とデータの構造を把握）
+-- SELECT ROW_NUMBER, RAW_HEADER, RAW_COLUMNS
+-- FROM DG_CATALOG.BRONZE.LANDING_RAW_FILE
+-- WHERE BATCH_ID = <A3で返された BATCH_ID>
+-- ORDER BY ROW_NUMBER
+-- LIMIT 10;
+
+-- (A5) Landing → Bronze 変換（シートのカラム位置を指定して構造化）
+--      例: 1列目=コード値, 2列目=表示ラベル, 3列目=説明
+-- CALL DG_CATALOG.BRONZE.SP_LANDING_TO_BRONZE_CODE_VALUE(
+--     <A3のBATCH_ID>,     -- P_LANDING_BATCH_ID
+--     1,                   -- P_SOURCE_SYSTEM_ID
+--     'コードマスタ(Excel)',  -- P_SOURCE_TYPE
+--     'code_master_v2.xlsx', -- P_SOURCE_IDENTIFIER
+--     'T_CLAIM',           -- P_TABLE_PHYSICAL_NAME
+--     'clm_stat_cd',       -- P_COLUMN_PHYSICAL_NAME
+--     'コード一覧',        -- P_SHEET_NAME（NULL なら全シート）
+--     1,                   -- P_COL_CODE_VALUE（コード値の列位置）
+--     2,                   -- P_COL_CODE_LABEL（表示ラベルの列位置）
+--     3                    -- P_COL_CODE_DESCRIPTION（説明の列位置。なければ NULL）
+-- );
+
+-- (A6) Bronze の取り込み結果を確認
+-- SELECT * FROM DG_CATALOG.BRONZE.RAW_CODE_VALUE_DEFINITION
+-- WHERE BATCH_ID = <A5で返された BATCH_ID>
+-- ORDER BY RAW_ID;
+
+-- ========================================
+-- パターンB: 構造化済み CSV → Bronze（変換済みの CSV を直接取り込む場合）
+-- ========================================
+
+-- (B1) ファイルアップロード（SnowSQL）
+-- PUT file:///data/extracts/design_T_CLAIM_20260726.csv @DG_CATALOG.BRONZE.STG_COLUMN_DEF_FILES;
+-- PUT file:///data/extracts/excel_T_CLAIM_20260726.csv @DG_CATALOG.BRONZE.STG_CODE_VALUE_DEF_FILES;
+
+-- (B2) 取り込み実行
 -- CALL DG_CATALOG.BRONZE.SP_LOAD_COLUMN_DEF_FROM_STAGE(1);
 -- CALL DG_CATALOG.BRONZE.SP_LOAD_CODE_VALUE_DEF_FROM_STAGE(1);
--- CALL DG_CATALOG.BRONZE.SP_LOAD_EXTRACTION_JSON_FROM_STAGE(1);
 
--- (4) 取り込み実行（一括）
--- CALL DG_CATALOG.BRONZE.SP_LOAD_ALL_FROM_STAGE(1);
-
--- (5) 取り込み結果の確認
--- SELECT * FROM DG_CATALOG.META.COLLECTION_BATCH ORDER BY BATCH_ID DESC LIMIT 5;
--- SELECT COUNT(*) FROM DG_CATALOG.BRONZE.RAW_COLUMN_DEFINITION WHERE BATCH_ID = <対象BATCH_ID>;
--- SELECT COUNT(*) FROM DG_CATALOG.BRONZE.RAW_CODE_VALUE_DEFINITION WHERE BATCH_ID = <対象BATCH_ID>;
+-- ========================================
+-- 共通: バッチ実行状況の確認
+-- ========================================
+-- SELECT * FROM DG_CATALOG.META.COLLECTION_BATCH ORDER BY BATCH_ID DESC LIMIT 10;
