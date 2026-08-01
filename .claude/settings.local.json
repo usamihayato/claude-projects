@@ -4,7 +4,9 @@
       "WebFetch(domain:support.collibra.com)",
       "WebFetch(domain:developer.collibra.com)",
       "WebFetch(domain:productresources.collibra.com)",
-      "WebFetch(domain:helm.sh)"
+      "WebFetch(domain:helm.sh)",
+      "WebFetch(domain:docs.snowflake.com)",
+      "WebSearch"
     ]
   }
 }

@@ -49,18 +49,24 @@ claude-projects/
 │               ├── aks-design.md
 │               ├── aks-aro-comparison.md
 │               └── helm.md
-└── learn-sqlserver-migration/                     ← SQL Server クラウド移行調査プロジェクト
+├── learn-sqlserver-migration/                     ← SQL Server クラウド移行調査プロジェクト
+│   ├── CLAUDE.md
+│   └── docs/
+│       ├── 01-migration-targets/
+│       ├── 02-knockout-requirements/
+│       ├── 03-adms/
+│       ├── 04-cost-analysis/
+│       ├── 05-network-design/
+│       └── 06-migration-procedures/              ← 移行手順書（検証・本番）
+│           ├── 01-verification-procedure.md      ← 自宅検証手順（BACPAC）
+│           ├── 02-production-dms-procedure.md    ← 本番移行手順（Azure DMS・2TB）
+│           └── fact-check.md                     ← 公式ドキュメントによるファクトチェック結果
+└── learn-snowflake/                               ← SnowPro Core 資格学習プロジェクト
     ├── CLAUDE.md
+    ├── snowflake-docs/                            ← 公式試験学習ガイドPDF（内部使用限定）
     └── docs/
-        ├── 01-migration-targets/
-        ├── 02-knockout-requirements/
-        ├── 03-adms/
-        ├── 04-cost-analysis/
-        ├── 05-network-design/
-        └── 06-migration-procedures/              ← 移行手順書（検証・本番）
-            ├── 01-verification-procedure.md      ← 自宅検証手順（BACPAC）
-            ├── 02-production-dms-procedure.md    ← 本番移行手順（Azure DMS・2TB）
-            └── fact-check.md                     ← 公式ドキュメントによるファクトチェック結果
+        ├── reading-list.md                        ← 公式ドキュメント読み込みリスト（分野別見出し）
+        └── notes.md                                ← 各ページの内容要約・試験対策チェックリスト
 ```
 
 ---
@@ -72,6 +78,7 @@ claude-projects/
 | `learn-oci/` | Oracle Cloud Infrastructure (OCI) 学習用プロジェクト | OCI 資格試験対策、インフラ設計 |
 | `learn-collibra-data-quality-and-observablity/` | Collibra Data Quality & Observability 導入調査 | Azure VM（Standalone）上での DQ Agent + Spark 構築 |
 | `learn-sqlserver-migration/` | SQL Server クラウド移行調査 | SQL MI / DMS / ノックアウト要件 / コスト最適化 |
+| `learn-snowflake/` | SnowPro Core 資格学習プロジェクト | SnowPro Core (COF-C03) 対策、公式ドキュメント読み込みリスト、Udemy誤答整理 |
 
 ---
 
@@ -107,6 +114,7 @@ claude-projects/
 | `developer.collibra.com` | Collibra 開発者ドキュメント |
 | `productresources.collibra.com` | Collibra 製品リソース（公式ドキュメント） |
 | `helm.sh` | Helm 公式ドキュメント |
+| `docs.snowflake.com` | Snowflake 公式ドキュメント |
 
 ---
 
