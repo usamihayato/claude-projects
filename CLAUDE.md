@@ -66,7 +66,12 @@ claude-projects/
     ├── snowflake-docs/                            ← 公式試験学習ガイドPDF（内部使用限定）
     └── docs/
         ├── reading-list.md                        ← 公式ドキュメント読み込みリスト（分野別見出し）
-        └── notes.md                                ← 各ページの内容要約・試験対策チェックリスト
+        ├── notes.md                                ← 各ページの内容要約・試験対策チェックリスト（横断サマリー）
+        ├── 01-architecture-and-features/           ← 分野1の詳細ノート（トピックごとに個別ファイル）
+        ├── 02-account-management-and-governance/   ← 分野2の詳細ノート
+        ├── 03-data-loading-unloading-connecting/   ← 分野3の詳細ノート
+        ├── 04-performance-query-transformation/    ← 分野4の詳細ノート
+        └── 05-data-collaboration/                  ← 分野5の詳細ノート
 ```
 
 ---

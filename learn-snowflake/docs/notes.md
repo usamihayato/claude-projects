@@ -113,6 +113,8 @@
 
 ### 1.5 Snowflakeストレージ概念の説明
 
+> 詳細ノート: [01-architecture-and-features/1.5-micropartitions-and-clustering.md](01-architecture-and-features/1.5-micropartitions-and-clustering.md)、[01-architecture-and-features/1.5-iceberg-tables.md](01-architecture-and-features/1.5-iceberg-tables.md)
+
 **マイクロパーティション**
 - 1パーティションは非圧縮で50〜500MB。挿入/ロード順にSnowflakeが自動的に透過的に分割（ユーザー管理不要）
 - 列指向で保存されるため必要な列のみを効率的にスキャン可能
@@ -364,7 +366,7 @@ PUBLIC（全ユーザー・全ロールに自動付与される疑似ロール�
 - クラスタリングキーと異なり、テーブルの物理的な再配置は行わない（メタデータレベルの最適化）
 - 適する用途: ポイントルックアップ、テキスト検索（SEARCH関数/LIKE）、半構造化データの等価検索、地理空間クエリ
 
-**クラスタリングキー**
+**クラスタリングキー**（詳細ノート: [04-performance-query-transformation/4.2-clustering-keys.md](04-performance-query-transformation/4.2-clustering-keys.md)）
 - 選定基準: 数TB規模、選択的フィルター/ソートを伴うクエリ、多くのクエリが同じキーの恩恵を受けること
 - 選定優先順位: ①SELECT述語で頻出の列 → ②JOIN述語で頻出の列。最大3〜4列、低カーディナリティ→高カーディナリティの順に配置
 - 自動再クラスタリング: DML後の劣化をSnowflakeが自動検出・再編成。クレジット消費とストレージコスト増（Time Travel/Fail-safe期間中は旧パーティションも保持）が発生
