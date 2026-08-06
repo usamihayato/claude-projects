@@ -257,6 +257,14 @@ Q1: 移行先は SQL MI か SQL DB か？
 
 ---
 
+## 個人検証ラボ（方式C・D の再現検証）
+
+Azure上でオンプレを模擬し、複数DB＋クロスDB参照Viewという構成で方式C・Dを個人サブスクリプションで検証する手順を用意しています。
+
+> 詳細手順: [06-personal-verification-lab.md](./06-personal-verification-lab.md)
+
+---
+
 ## 参考リンク
 
 | ドキュメント | URL |
