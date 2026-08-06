@@ -26,17 +26,21 @@
 ```
 STEP 1  互換性レベルを確認（オンプレで実施）
 STEP 2  Azure SQL Database を作成（移行先・高スペックで用意）
-STEP 3  Azure Storage Account を作成
-STEP 4  DataMigration リソースプロバイダーを登録
-STEP 5  Azure DMS インスタンスを作成
-STEP 6  SHIR をインストール・登録（オンプレまたは Azure VNet 内 VM）
-STEP 7  移行プロジェクトを作成・実行
-STEP 8  進捗を監視
-STEP 9  動作確認
-STEP 10 サーバレスにスケールダウン
-STEP 11 READ_ONLY設定
-STEP 12 後片付け（不要リソース削除）
+STEP 3  DataMigration リソースプロバイダーを登録
+STEP 4  Azure DMS インスタンスを作成
+STEP 5  SHIR をインストール・登録（オンプレまたは Azure VNet 内 VM）
+STEP 6  移行プロジェクトを作成・実行
+STEP 7  進捗を監視
+STEP 8  動作確認
+STEP 9  サーバレスにスケールダウン
+STEP 10 READ_ONLY設定
+STEP 11 後片付け（不要リソース削除）
 ```
+
+> **Storage Account は不要です**
+> SQL MI 向け（方式A/B）はネイティブバックアップを Blob 経由で `RESTORE FROM URL` するため Storage Account が必須ですが、
+> SQL DB 向けの DMS オフライン移行は内部で Azure Data Factory パイプラインを使い、SHIR がソースからターゲットへ直接データをコピーします（公式ドキュメントの制限事項に明記）。
+> バックアップファイルを経由しないため、Blob Storage を中継地点として用意する必要はありません。
 
 ---
 
@@ -75,7 +79,7 @@ SET COMPATIBILITY_LEVEL = 100;
 
 > ⚠️ **移行中だけ高スペックにします**
 > 転送速度を上げるためにMicrosoftが推奨している方法です。
-> 移行完了後（STEP 10）にサーバレスへ変更します。
+> 移行完了後（STEP 9）にサーバレスへ変更します。
 
 1. **Azureポータル**（https://portal.azure.com）にサインイン
 2. 「リソースの作成」→「Azure SQL」→「SQLデータベース」を選択
@@ -124,27 +128,7 @@ EXECUTE sp_addRoleMember 'loginmanager','dmsuser';
 
 ---
 
-## STEP 3｜Azure Storage Account を作成
-
-DMSがデータを一時的に置くストレージです。
-
-1. ポータル → 「ストレージアカウント」→「作成」
-2. 以下を設定：
-
-| 項目 | 設定値 |
-|---|---|
-| リソースグループ | `rg-production-migration`（同じもの） |
-| ストレージアカウント名 | 任意（英小文字と数字のみ） |
-| リージョン | **Japan East**（※SQL Databaseと必ず同じに） |
-| パフォーマンス | Standard |
-
-3. 「確認および作成」→「作成」
-
-> ⚠️ **リージョンが異なると転送コストが発生し、速度も下がります**
-
----
-
-## STEP 4｜DataMigration リソースプロバイダーを登録
+## STEP 3｜DataMigration リソースプロバイダーを登録
 
 AzureサブスクリプションでDMSを使えるようにする**一回だけの設定**です。
 
@@ -156,7 +140,7 @@ AzureサブスクリプションでDMSを使えるようにする**一回だけ�
 
 ---
 
-## STEP 5｜Azure DMS インスタンスを作成（新ポータル UI）
+## STEP 4｜Azure DMS インスタンスを作成（新ポータル UI）
 
 > ⚠️ **2026年3月以降、DMS クラシック（価格レベル「Standard」を選ぶ旧 UI）は廃止されました。**
 > 以下は新ポータル UI での手順です。
@@ -181,12 +165,12 @@ AzureサブスクリプションでDMSを使えるようにする**一回だけ�
 
 「確認および作成」→「作成」をクリックします。
 
-> SHIR の登録は STEP 6 で作成した DMS インスタンスから行います（後述）。
-> 移行完了後（STEP 12）に削除してOKです。
+> SHIR の登録は STEP 5 で作成した DMS インスタンスから行います（後述）。
+> 移行完了後（STEP 11）に削除してOKです。
 
 ---
 
-## STEP 6｜SHIR をインストール・登録
+## STEP 5｜SHIR をインストール・登録
 
 ### SHIR とは？
 
@@ -245,7 +229,7 @@ SQL Serverのバージョン情報が表示されれば接続OK。
 
 ---
 
-## STEP 7｜移行プロジェクトを作成・実行（新ウィザード）
+## STEP 6｜移行プロジェクトを作成・実行（新ウィザード）
 
 > ⚠️ **旧ウィザード（「移行プロジェクトの新規作成」）は廃止されました。**
 > 以下は新 UI での手順です。
@@ -316,7 +300,7 @@ SQL Serverのバージョン情報が表示されれば接続OK。
 
 ---
 
-## STEP 8｜進捗を監視
+## STEP 7｜進捗を監視
 
 DMS インスタンスの概要 → 「**移行の監視**」でテーブル単位の進捗を確認できます。
 
@@ -342,7 +326,7 @@ DMS インスタンスの概要 → 「**移行の監視**」でテーブル単�
 
 ---
 
-## STEP 9｜動作確認
+## STEP 8｜動作確認
 
 SSMSからAzure SQL Databaseに接続して確認します。
 
@@ -372,7 +356,7 @@ SELECT TOP 100 * FROM （主要テーブル名）;
 
 ---
 
-## STEP 10｜サーバレスにスケールダウン
+## STEP 9｜サーバレスにスケールダウン
 
 移行確認後、コストを下げるためにサービスレベルを変更します。
 
@@ -390,7 +374,7 @@ SELECT TOP 100 * FROM （主要テーブル名）;
 
 ---
 
-## STEP 11｜READ_ONLY設定
+## STEP 10｜READ_ONLY設定
 
 ```sql
 -- 読み取り専用に設定
@@ -413,14 +397,13 @@ INSERT INTO （テーブル名） VALUES (...);
 
 ---
 
-## STEP 12｜後片付け（不要リソース削除）
+## STEP 11｜後片付け（不要リソース削除）
 
 移行が完了したら課金リソースを削除します。
 
 | リソース | 対応 |
 |---|---|
 | Azure DMS インスタンス | ✅ **削除する**（課金対象） |
-| Azure Storage Account | ✅ **削除する** |
 | SHIR（インストールしたマシン上） | ✅ アンインストール |
 | Azure SQL Database | 🔒 **残す**（本番運用リソース） |
 | リソースグループ | 🔒 **残す**（管理用） |
@@ -433,7 +416,6 @@ INSERT INTO （テーブル名） VALUES (...);
 |---|---|
 | 互換性レベルが100である | ☐ |
 | Azure SQL Database（移行先・8vCore）が作成された | ☐ |
-| Storage Accountが作成された（Japan East） | ☐ |
 | Microsoft.DataMigrationが登録された | ☐ |
 | DMSインスタンスが作成された（新UI） | ☐ |
 | SHIRがインストール・登録された（状態：実行中） | ☐ |
@@ -445,7 +427,7 @@ INSERT INTO （テーブル名） VALUES (...);
 | 代表クエリが正常に動作した | ☐ |
 | サーバレスにスケールダウンした | ☐ |
 | READ_ONLYが設定された | ☐ |
-| DMSとStorageを削除した | ☐ |
+| DMSを削除した | ☐ |
 
 ---
 

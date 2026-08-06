@@ -1,0 +1,343 @@
+az vm create \                                                                   
+  --resource-group rg-sqldb-verify-lab \
+  --name vm-onprem-sim \
+  --image "MicrosoftSQLServer:sql2022-ws2022:sqldev-gen2:latest" \
+  --size Standard_B2s \
+  --vnet-name vnet-verify-lab \
+  --subnet subnet-onprem-sim \
+  --admin-username azureuser \
+  --admin-password "P@ssw0rd20260806" \
+  --public-ip-sku Standard
+
+-------------------------------------------------
+
+
+ALTER LOGIN sa WITH PASSWORD = 'P@ssw0rd20260806';
+ALTER LOGIN sa ENABLE;
+GO
+
+-- 混合モード（SQL + Windows認証）が有効か確認（結果が 0 ならOK、1ならWindows認証のみ）
+SELECT SERVERPROPERTY('IsIntegratedSecurityOnly');
+
+
+------------------------------------------------
+
+SqlPackage /Action:Export ^
+  /SourceServerName:"localhost,1433" ^
+  /SourceDatabaseName:"LabCustomer" ^
+  /SourceUser:"sa" ^
+  /SourcePassword:"P@ssw0rd20260806" ^
+  /SourceTrustServerCertificate:True ^
+  /TargetFile:"C:\lab\LabCustomer.bacpac"
+
+--------------------------------------------------
+  SqlPackage /Action:Export ^
+  /SourceServerName:"localhost,1433" ^
+  /SourceDatabaseName:"LabSales" ^
+  /SourceUser:"sa" ^
+  /SourcePassword:"P@ssw0rd20260806" ^
+  /SourceTrustServerCertificate:True ^
+  /TargetFile:"C:\lab\LabSales.bacpac"
+
+
+C:\Users\azureuser>  SqlPackage /Action:Export ^
+More?   /SourceServerName:"localhost,1433" ^
+More?   /SourceDatabaseName:"LabSales" ^
+More?   /SourceUser:"sa" ^
+More?   /SourcePassword:"P@ssw0rd20260806" ^
+More?   /SourceTrustServerCertificate:True ^
+More?   /TargetFile:"C:\lab\LabSales.bacpac"
+Connecting to database 'LabSales' on server 'localhost,1433'.
+Extracting schema
+Extracting schema from database
+Resolving references in schema model
+Validating schema model
+Validating schema model for data package
+Validating schema
+*** Error exporting database:One or more unsupported elements were found in the schema used as part of a data package.
+Error SQL71561: Error validating element [dbo].[vw_OrderWithCustomer]: View: [dbo].[vw_OrderWithCustomer] contains an unresolved reference to an object. Either the object does not exist or the reference is ambiguous because it could refer to any of the following objects: [LabCustomer].[dbo].[Customers].[c], [LabCustomer].[dbo].[Customers].[CustomerName] or [LabSales].[dbo].[Orders].[c]. External references are not supported when creating a package from this platform.
+Error SQL71561: Error validating element [dbo].[vw_OrderWithCustomer]: View: [dbo].[vw_OrderWithCustomer] has an unresolved reference to object [LabSales].[dbo].[Orders]. External references are not supported when creating a package from this platform.
+Error SQL71561: Error validating element [dbo].[vw_OrderWithCustomer]: View: [dbo].[vw_OrderWithCustomer] has an unresolved reference to object [LabCustomer].[dbo].[Customers]. External references are not supported when creating a package from this platform.
+Error SQL71561: Error validating element [dbo].[vw_OrderWithCustomer]: View: [dbo].[vw_OrderWithCustomer] contains an unresolved reference to an object. Either the object does not exist or the reference is ambiguous because it could refer to any of the following objects: [LabCustomer].[dbo].[Customers].[o], [LabSales].[dbo].[Orders].[CustomerId] or [LabSales].[dbo].[Orders].[o]. External references are not supported when creating a package from this platform.
+Error SQL71561: Error validating element [dbo].[vw_OrderWithCustomer]: View: [dbo].[vw_OrderWithCustomer] contains an unresolved reference to an object. Either the object does not exist or the reference is ambiguous because it could refer to any of the following objects: [LabCustomer].[dbo].[Customers].[c], [LabCustomer].[dbo].[Customers].[CustomerId] or [LabSales].[dbo].[Orders].[c]. External references are not supported when creating a package from this platform.
+Error SQL71561: Error validating element [dbo].[vw_OrderWithCustomer]: View: [dbo].[vw_OrderWithCustomer] contains an unresolved reference to an object. Either the object does not exist or the reference is ambiguous because it could refer to any of the following objects: [LabCustomer].[dbo].[Customers].[o], [LabSales].[dbo].[Orders].[o] or [LabSales].[dbo].[Orders].[OrderId]. External references are not supported when creating a package from this platform.
+Error SQL71561: Error validating element [dbo].[vw_OrderWithCustomer]: View: [dbo].[vw_OrderWithCustomer] contains an unresolved reference to an object. Either the object does not exist or the reference is ambiguous because it could refer to any of the following objects: [LabCustomer].[dbo].[Customers].[o], [LabSales].[dbo].[Orders].[o] or [LabSales].[dbo].[Orders].[OrderAmount]. External references are not supported when creating a package from this platform.
+Error SQL71561: Error validating element [dbo].[vw_OrderWithCustomer].[CustomerName]: Computed Column: [dbo].[vw_OrderWithCustomer].[CustomerName] contains an unresolved reference to an object. Either the object does not exist or the reference is ambiguous because it could refer to any of the following objects: [LabCustomer].[dbo].[Customers].[c], [LabCustomer].[dbo].[Customers].[CustomerName] or [LabSales].[dbo].[Orders].[c]. External references are not supported when creating a package from this platform.
+Error SQL71561: Error validating element [dbo].[vw_OrderWithCustomer].[OrderAmount]: Computed Column: [dbo].[vw_OrderWithCustomer].[OrderAmount] contains an unresolved reference to an object. Either the object does not exist or the reference is ambiguous because it could refer to any of the following objects: [LabCustomer].[dbo].[Customers].[o], [LabSales].[dbo].[Orders].[o] or [LabSales].[dbo].[Orders].[OrderAmount]. External references are not supported when creating a package from this platform.
+Error SQL71561: Error validating element [dbo].[vw_OrderWithCustomer].[OrderId]: Computed Column: [dbo].[vw_OrderWithCustomer].[OrderId] contains an unresolved reference to an object. Either the object does not exist or the reference is ambiguous because it could refer to any of the following objects: [LabCustomer].[dbo].[Customers].[o], [LabSales].[dbo].[Orders].[o] or [LabSales].[dbo].[Orders].[OrderId]. External references are not supported when creating a package from this platform.
+
+Time elapsed 0:00:15.01
+
+--------------------------------------------------------
+
+SqlPackage /Action:Export ^
+  /SourceServerName:"localhost,1433" ^
+  /SourceDatabaseName:"LabSales" ^
+  /SourceUser:"sa" ^
+  /SourcePassword:"P@ssw0rd20260806" ^
+  /SourceTrustServerCertificate:True ^
+  /TargetFile:"C:\lab\LabSales.bacpac" ^
+  /p:VerifyExtraction=false
+
+  C:\Users\azureuser>SqlPackage /Action:Export ^
+More?   /SourceServerName:"localhost,1433" ^
+More?   /SourceDatabaseName:"LabSales" ^
+More?   /SourceUser:"sa" ^
+More?   /SourcePassword:"P@ssw0rd20260806" ^
+More?   /SourceTrustServerCertificate:True ^
+More?   /TargetFile:"C:\lab\LabSales.bacpac" ^
+More?   /p:VerifyExtraction=false
+Connecting to database 'LabSales' on server 'localhost,1433'.
+Extracting schema
+Extracting schema from database
+Resolving references in schema model
+Validating schema model for data package
+Validating schema
+Processing tables for data extraction
+Exporting data from database
+Exporting data
+Processing Export.
+Processing Table '[dbo].[Orders]'.
+Successfully exported database and saved it to file 'C:\lab\LabSales.bacpac'.
+Time elapsed 0:00:03.54
+
+--------------------------------------------------------
+SqlPackage /Action:Import ^
+  /TargetServerName:"sql-verify-target.database.windows.net" ^
+  /TargetDatabaseName:"LabCustomer_c" ^
+  /TargetUser:"TargetUser" ^
+  /TargetPassword:"P@ssw0rd20260806" ^
+  /SourceFile:"C:\lab\LabCustomer.bacpac"
+
+C:\Users\azureuser>SqlPackage /Action:Import ^
+More?   /TargetServerName:"sql-verify-target.database.windows.net" ^
+More?   /TargetDatabaseName:"LabCustomer_c" ^
+More?   /TargetUser:"TargetUser" ^
+More?   /TargetPassword:"P@ssw0rd20260806" ^
+More?   /SourceFile:"C:\lab\LabCustomer.bacpac"
+Importing to database 'LabCustomer_c' on server 'sql-verify-target.database.windows.net'.
+Creating deployment plan
+Initializing deployment
+*** Connection Timeout Expired.  The timeout period elapsed during the post-login phase.  The connection could have timed out while waiting for server to complete the login process and respond; Or it could have timed out while attempting to create multiple active connections.  The duration spent while attempting to connect to this server was - [Pre-Login] initialization=12; handshake=22; [Login] initialization=0; authentication=0; [Post-Login] complete=29181;
+*** A project which specifies SQL Server 2022 as the target platform may experience compatibility issues with Microsoft Azure SQL Database v12.
+*** The object [data_0] exists in the target, but it will not be dropped even though you selected the 'Generate drop statements for objects that are in the target database but that are not in the source' check box.
+*** The object [log] exists in the target, but it will not be dropped even though you selected the 'Generate drop statements for objects that are in the target database but that are not in the source' check box.
+Verifying deployment plan
+Analyzing deployment plan
+Importing package schema and data into database
+Updating database
+Importing data
+Processing Import.
+Disabling indexes.
+Processing Table '[dbo].[Customers]'.
+Enabling indexes.
+Successfully imported database.
+Time elapsed 0:01:12.55
+--------------------------------------------------------
+
+SqlPackage /Action:Import ^
+  /TargetServerName:"sql-verify-target.database.windows.net" ^
+  /TargetDatabaseName:"LabSales_c" ^
+  /TargetUser:"TargetUser" ^
+  /TargetPassword:"P@ssw0rd20260806" ^
+  /SourceFile:"C:\lab\LabSales.bacpac"
+C:\Users\azureuser>SqlPackage /Action:Import ^
+More?   /TargetServerName:"sql-verify-target.database.windows.net" ^
+More?   /TargetDatabaseName:"LabSales_c" ^
+More?   /TargetUser:"TargetUser" ^
+More?   /TargetPassword:"P@ssw0rd20260806" ^
+More?   /SourceFile:"C:\lab\LabSales.bacpac"
+Importing to database 'LabSales_c' on server 'sql-verify-target.database.windows.net'.
+Creating deployment plan
+Initializing deployment
+*** A project which specifies SQL Server 2022 as the target platform may experience compatibility issues with Microsoft Azure SQL Database v12.
+*** The object [data_0] exists in the target, but it will not be dropped even though you selected the 'Generate drop statements for objects that are in the target database but that are not in the source' check box.
+*** The object [log] exists in the target, but it will not be dropped even though you selected the 'Generate drop statements for objects that are in the target database but that are not in the source' check box.
+Verifying deployment plan
+Analyzing deployment plan
+Importing package schema and data into database
+Updating database
+*** Error importing database:Could not import package.
+Warning SQL0: A project which specifies SQL Server 2022 as the target platform may experience compatibility issues with Microsoft Azure SQL Database v12.
+Warning SQL72012: The object [data_0] exists in the target, but it will not be dropped even though you selected the 'Generate drop statements for objects that are in the target database but that are not in the source' check box.
+Warning SQL72012: The object [log] exists in the target, but it will not be dropped even though you selected the 'Generate drop statements for objects that are in the target database but that are not in the source' check box.
+Error SQL72014: Core Microsoft SqlClient Data Provider: Msg 40515, Level 15, State 1, Procedure vw_OrderWithCustomer, Line 16 Reference to database and/or server name in 'LabSales.dbo.Orders' is not supported in this version of SQL Server.
+Error SQL72045: Script execution error.  The executed script:
+CREATE VIEW dbo.vw_OrderWithCustomer
+AS
+SELECT o.OrderId,
+       o.OrderAmount,
+       c.CustomerName
+FROM   LabSales.dbo.Orders AS o
+       INNER JOIN
+       LabCustomer.dbo.Customers AS c
+       ON o.CustomerId = c.CustomerId;
+
+
+
+Time elapsed 0:00:25.12
+
+
+----------------------------------------------------------------------
+LabSales
+{
+  "properties": {
+    "migrationStatusDetails": {
+      "migrationState": "Succeeded",
+      "listOfCopyProgressDetails": [
+        {
+          "tableName": "[dbo].[Orders]",
+          "status": "Succeeded",
+          "parallelCopyType": "None",
+          "usedParallelCopies": 1,
+          "dataRead": 56,
+          "dataWritten": 56,
+          "rowsRead": 2,
+          "rowsCopied": 2,
+          "copyStart": "2026-08-06T04:28:02.023Z",
+          "copyThroughput": 0.009999999776482582,
+          "copyDuration": 93
+        }
+      ],
+      "sqlSchemaMigrationStatus": {
+        "errors": [
+          "Schema migration has errors. 'Deployed failure: Reference to database and/or server name in 'LabSales.dbo.Orders' is not supported in this version of SQL Server. Object element: [dbo].[vw_OrderWithCustomer].\n\n'[]"
+        ],
+        "status": "CompletedWithError",
+        "objectsCollection": {
+          "totalCountOfObjectsCollected": 2,
+          "startedOn": "2026-08-06T04:16:19.5499233Z",
+          "endedOn": "2026-08-06T04:16:21.7374107Z"
+        },
+        "scriptGeneration": {
+          "progressInPercentage": 100,
+          "scriptedObjectsCount": 2,
+          "scriptedObjectsFailedCount": 0,
+          "startedOn": "2026-08-06T04:16:21.7686608Z",
+          "endedOn": "2026-08-06T04:16:38.2574306Z",
+          "errors": []
+        },
+        "scriptDeployment": {
+          "progressInPercentage": 100,
+          "startedOn": "2026-08-06T04:16:38.3686657Z",
+          "endedOn": "2026-08-06T04:16:38.4797052Z",
+          "succeededDeploymentCount": 5,
+          "failedDeploymentCount": 1,
+          "errors": [
+            "Deployed failure: Reference to database and/or server name in 'LabSales.dbo.Orders' is not supported in this version of SQL Server. Object element: [dbo].[vw_OrderWithCustomer]."
+          ]
+        }
+      }
+    },
+    "offlineConfiguration": {
+      "offline": true
+    },
+    "backupConfiguration": {
+      "sourceLocation": {
+        "fileStorageType": "None"
+      }
+    },
+    "sqlDataMigrationConfiguration": {
+      "enableDataMigration": true
+    },
+    "sqlSchemaMigrationConfiguration": {
+      "enableSchemaMigration": true
+    },
+    "tableList": [
+      "[dbo].[Orders]"
+    ],
+    "sourceServerName": "vm-onprem-sim",
+    "sourceDatabaseName": "LabSales",
+    "scope": "/subscriptions/bc8ce12a-3dd6-4068-8ab9-0e536826d6fc/resourceGroups/rg-sqldb-verify-lab/providers/Microsoft.Sql/servers/sql-verify-target",
+    "provisioningState": "Succeeded",
+    "migrationStatus": "Succeeded",
+    "startedOn": "2026-08-06T04:15:55.283Z",
+    "endedOn": "2026-08-06T05:03:11.987Z",
+    "migrationService": "/subscriptions/bc8ce12a-3dd6-4068-8ab9-0e536826d6fc/resourceGroups/rg-sqldb-verify-lab/providers/Microsoft.DataMigration/sqlMigrationServices/dms-verify-lab",
+    "migrationOperationId": "7a1b1599-9ff7-4cf9-8bf9-06c5d9596c86",
+    "kind": "SqlDb"
+  },
+  "id": "/subscriptions/bc8ce12a-3dd6-4068-8ab9-0e536826d6fc/resourceGroups/rg-sqldb-verify-lab/providers/Microsoft.Sql/servers/sql-verify-target/providers/Microsoft.DataMigration/databaseMigrations/LabSales_c",
+  "name": "LabSales_c",
+  "type": "Microsoft.DataMigration/databaseMigrations"
+}
+
+
+-------------------------------------------------------------------
+LabCustomer
+{
+  "properties": {
+    "migrationStatusDetails": {
+      "migrationState": "Succeeded",
+      "listOfCopyProgressDetails": [
+        {
+          "tableName": "[dbo].[Customers]",
+          "status": "Succeeded",
+          "parallelCopyType": "None",
+          "usedParallelCopies": 1,
+          "dataRead": 34,
+          "dataWritten": 34,
+          "rowsRead": 2,
+          "rowsCopied": 2,
+          "copyStart": "2026-08-06T06:19:55.33Z",
+          "copyThroughput": 0.017000000923871994,
+          "copyDuration": 6
+        }
+      ],
+      "sqlSchemaMigrationStatus": {
+        "status": "Completed",
+        "objectsCollection": {
+          "totalCountOfObjectsCollected": 1,
+          "startedOn": "2026-08-06T06:15:01.3593944Z",
+          "endedOn": "2026-08-06T06:15:03.2247453Z"
+        },
+        "scriptGeneration": {
+          "progressInPercentage": 100,
+          "scriptedObjectsCount": 1,
+          "scriptedObjectsFailedCount": 0,
+          "startedOn": "2026-08-06T06:15:03.2716851Z",
+          "endedOn": "2026-08-06T06:15:17.3495123Z",
+          "errors": []
+        },
+        "scriptDeployment": {
+          "progressInPercentage": 100,
+          "startedOn": "2026-08-06T06:15:17.4744853Z",
+          "endedOn": "2026-08-06T06:15:17.5213345Z",
+          "succeededDeploymentCount": 3,
+          "failedDeploymentCount": 0,
+          "errors": []
+        }
+      }
+    },
+    "offlineConfiguration": {
+      "offline": true
+    },
+    "backupConfiguration": {
+      "sourceLocation": {
+        "fileStorageType": "None"
+      }
+    },
+    "sqlDataMigrationConfiguration": {
+      "enableDataMigration": true
+    },
+    "sqlSchemaMigrationConfiguration": {
+      "enableSchemaMigration": true
+    },
+    "tableList": [
+      "[dbo].[Customers]"
+    ],
+    "sourceServerName": "vm-onprem-sim",
+    "sourceDatabaseName": "LabCustomer",
+    "scope": "/subscriptions/bc8ce12a-3dd6-4068-8ab9-0e536826d6fc/resourceGroups/rg-sqldb-verify-lab/providers/Microsoft.Sql/servers/sql-verify-target",
+    "provisioningState": "Succeeded",
+    "migrationStatus": "Succeeded",
+    "startedOn": "2026-08-06T06:14:46.453Z",
+    "endedOn": "2026-08-06T06:23:21.117Z",
+    "migrationService": "/subscriptions/bc8ce12a-3dd6-4068-8ab9-0e536826d6fc/resourceGroups/rg-sqldb-verify-lab/providers/Microsoft.DataMigration/sqlMigrationServices/dms-verify-lab",
+    "migrationOperationId": "0020fc98-3734-4de8-a79f-1d0e9e2a72e2",
+    "kind": "SqlDb"
+  },
+  "id": "/subscriptions/bc8ce12a-3dd6-4068-8ab9-0e536826d6fc/resourceGroups/rg-sqldb-verify-lab/providers/Microsoft.Sql/servers/sql-verify-target/providers/Microsoft.DataMigration/databaseMigrations/LabCustomer_c",
+  "name": "LabCustomer_c",
+  "type": "Microsoft.DataMigration/databaseMigrations"
+}

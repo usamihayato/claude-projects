@@ -36,8 +36,6 @@
   │              │                 → LabCustomer.dbo.Customers を3部名参照（★クロスDB View）
   │              └─ SHIR（統合ランタイム）  ※方式D検証時のみインストール
   │
-  ├─ Storage Account: stsqldbverifylab（方式D検証時のみ作成／Standard LRS）
-  │
   └─ Azure SQL 論理サーバー: sql-verify-target
        ├─ LabCustomer_c / LabSales_c　（方式C検証用）
        └─ LabCustomer_d / LabSales_d　（方式D検証用）
@@ -54,12 +52,11 @@
 | VM | `Standard_B2s`。検証しない時間は必ず「停止（割り当て解除）」 | 割り当て解除しないと課金が続く点に注意 |
 | SQL Server ライセンス | Marketplace の「SQL Server Developer」イメージを使用 | Developer Edition は本番利用不可だがライセンス費用なし。VM のコンピューティング代のみ課金 |
 | Azure SQL Database | General Purpose **サーバーレス** + **無料データベースオファー** | 無料オファーは **1サブスクリプションにつき1DBのみ**。2つ目以降はサーバーレス最小構成（0.5 vCore・自動一時停止1時間）で数十円/日程度 |
-| Azure DMS | 方式Dの検証時のみ作成し、**検証後は即削除** | 稼働時間課金のため、方式C検証中は作成しない |
-| Storage Account | 方式Dの検証時のみ作成、完了後削除 | 数円程度 |
+| Azure DMS | 方式Dの検証時のみ作成し、**検証後は即削除** | 稼働時間課金のため、方式C検証中は作成しない。SQL DB向けDMSは内部でADFパイプラインを使い直接データコピーするため、Storage Accountは不要 |
 | ネットワーク | パブリックエンドポイント＋ファイアウォール規則のみ | Private Endpoint・ExpressRoute は本番手順（[03-production-sqldb-multi-procedure.md](./03-production-sqldb-multi-procedure.md)）専用の構成のため、個人検証では使わない（コスト増要因） |
 | SHIR | ソフトウェア自体は無料 | `vm-onprem-sim` に同居させて追加VM費用を発生させない |
 
-> 目安：VM は検証時間のみ稼働（数時間×数回）、DB はサーバーレス＋無料オファーで運用した場合、月あたり数百円〜千円程度に収まる想定です。DMS とStorage Accountは「使う日だけ作る」を徹底してください。
+> 目安：VM は検証時間のみ稼働（数時間×数回）、DB はサーバーレス＋無料オファーで運用した場合、月あたり数百円〜千円程度に収まる想定です。DMSは「使う日だけ作る」を徹底してください。
 
 ---
 
@@ -131,6 +128,11 @@ Portal から作成する場合は「仮想マシンの作成」→ Marketplace 
 
 VM に RDP 接続し、SSMS で SQL Server インスタンスに接続して実行します。
 
+> ⚠️ **証明書の警告が出た場合**
+> VM上のSQL Serverは自己署名証明書を使っているため、SSMSの「サーバーへの接続」ダイアログで
+> 「オプション >>」→「接続のプロパティ」タブの **「サーバー証明書を信頼する」** にチェックを入れてから接続してください。
+> チェックしないと `The certificate chain was issued by an authority that is not trusted` エラーになります（Windows認証・SQL認証どちらでも発生します）。
+
 ```sql
 -- Customers 側のDB
 CREATE DATABASE LabCustomer;
@@ -187,6 +189,29 @@ SELECT * FROM dbo.vw_OrderWithCustomer;
 -- OrderId, OrderAmount, CustomerName が正しく返れば正常
 ```
 
+**SQL Server認証（`sa`ユーザー）の有効化**：
+
+後続の SqlPackage（STEP B3）・Azure DMS（Part C）はいずれも SQL Server 認証の `sa` ユーザーで接続する前提のため、ここで有効化してパスワードを設定しておきます（既定では `sa` は無効・パスワード未設定です）。
+
+```sql
+ALTER LOGIN sa WITH PASSWORD = '（強いパスワード）';
+ALTER LOGIN sa ENABLE;
+GO
+
+-- 混合モード（SQL + Windows認証）が有効か確認（結果が 0 ならOK、1ならWindows認証のみ）
+SELECT SERVERPROPERTY('IsIntegratedSecurityOnly');
+```
+
+> ⚠️ 上記の結果が `1`（Windows認証のみ）だった場合は、以下の手順で混合モードに変更してください。
+>
+> 1. オブジェクトエクスプローラーでインスタンス名を右クリック →「プロパティ」→「セキュリティ」ページ
+> 2. 「サーバー認証」で **「SQL Server 認証モードと Windows 認証モードを使用する」** を選択 →「OK」
+>    （「サービスの再起動が必要」というダイアログが出るが、ここではまだ再起動されない）
+> 3. VM内のスタートメニューから **「SQL Server 構成マネージャー」** を起動
+> 4. 左ペイン「SQL Server サービス」→ 右ペインの「SQL Server (MSSQLSERVER)」を右クリック →「再起動」
+> 5. SSMSに再接続し、`SELECT SERVERPROPERTY('IsIntegratedSecurityOnly');` が `0` になったことを確認
+> 6. 新規接続を「SQL Server 認証」・ログイン名`sa`で開き、ログインできることを確認
+
 ### STEP A4｜移行前データの記録
 
 ```sql
@@ -208,6 +233,12 @@ SELECT 'LabSales.Orders', COUNT(*) FROM LabSales.dbo.Orders;
 ### STEP B1｜移行先 Azure SQL Database 作成
 
 論理サーバー `sql-verify-target` を新規作成し、配下に2DBを作成します。
+
+> **認証方式：「SQL 認証を使用する」を選択**
+> 「Microsoft Entra 認証専用」を選ぶとSQLログインが無効化され、STEP B4のSqlPackage Import（`/TargetUser`/`/TargetPassword`）や
+> 方式D側で`dmsuser`をSQL認証で作成する手順（[02-sql-db-dms-offline.md](./02-sql-db-dms-offline.md) STEP 2）が失敗します。
+> 「両方」でも動きますが、Microsoft Entra管理者の追加設定が不要な分、「SQL 認証を使用する」だけで十分です。
+> ここで設定するサーバー管理者ユーザー名・パスワードが、STEP B4の`/TargetUser`/`/TargetPassword`になります。
 
 | DB名 | サービスレベル | 備考 |
 |---|---|---|
@@ -238,6 +269,7 @@ SqlPackage /Action:Export ^
   /SourceDatabaseName:"LabCustomer" ^
   /SourceUser:"sa" ^
   /SourcePassword:"（パスワード）" ^
+  /SourceTrustServerCertificate:True ^
   /TargetFile:"C:\lab\LabCustomer.bacpac"
 ```
 
@@ -251,6 +283,7 @@ SqlPackage /Action:Export ^
   /SourceDatabaseName:"LabSales" ^
   /SourceUser:"sa" ^
   /SourcePassword:"（パスワード）" ^
+  /SourceTrustServerCertificate:True ^
   /TargetFile:"C:\lab\LabSales.bacpac"
 ```
 
@@ -264,6 +297,7 @@ SqlPackage /Action:Export ^
   /SourceDatabaseName:"LabSales" ^
   /SourceUser:"sa" ^
   /SourcePassword:"（パスワード）" ^
+  /SourceTrustServerCertificate:True ^
   /TargetFile:"C:\lab\LabSales.bacpac" ^
   /p:VerifyExtraction=false
 ```
@@ -272,9 +306,9 @@ SqlPackage /Action:Export ^
 
 | 試行 | 結果 | エラー内容（あれば） |
 |---|---|---|
-| LabCustomer エクスポート | ☐成功 ☐失敗 | |
-| LabSales エクスポート（デフォルト） | ☐成功 ☐失敗 | |
-| LabSales エクスポート（`/p:VerifyExtraction=false`） | ☐成功 ☐失敗 | |
+| LabCustomer エクスポート | ☑成功 ☐失敗 | |
+| LabSales エクスポート（デフォルト） | ☐成功 ☑失敗 | `SQL71561`：`vw_OrderWithCustomer` が `LabCustomer.dbo.Customers` への未解決の外部参照を含むためスキーマモデル検証エラー（ドキュメントの推測は`SQL71501`系だったが、実測は`SQL71561`） |
+| LabSales エクスポート（`/p:VerifyExtraction=false`） | ☑成功 ☐失敗 | 検証パスをスキップして成功。ただしViewの参照自体は未解決のまま.bacpacに封じ込められているだけ（STEP B4以降で実際に機能するかは別途確認） |
 
 ### STEP B4｜インポート実行
 
@@ -308,16 +342,17 @@ SELECT * FROM dbo.Orders;
 SELECT * FROM dbo.vw_OrderWithCustomer;
 ```
 
-> **想定される挙動**：View自体は作成できていても、クエリ実行時に Azure SQL Database 特有のエラー（`Msg 40515`：「参照 'LabCustomer.dbo.Customers' 内のデータベースまたはサーバー名の指定は、このバージョンの SQL Server ではサポートされていません」相当）が出る可能性が高いです。
+> **実測結果**：View自体がクエリ実行以前の**インポート（デプロイ）段階で作成に失敗**しました。`SqlPackage /Action:Import`実行時に`SQL72014`／`Msg 40515`（「参照 'LabSales.dbo.Orders' 内のデータベースまたはサーバー名の指定は、このバージョンの SQL Server ではサポートされていません」）で`CREATE VIEW`自体がエラーとなり、インポート処理全体が`Could not import package.`で中断。ログ上、Viewエラー以降に`Importing data`／`Processing Table`が一切出力されておらず、データ投入フェーズまで到達していません。
+> 「View自体は作成できるが、クエリ実行時にエラーになる」という当初の予想より踏み込んだ結果で、**デプロイの時点でImportそのものが失敗する**という挙動でした。
 
 #### 検証結果記録欄
 
 | 確認項目 | 結果 |
 |---|---|
-| LabCustomer_c の件数（オンプレと一致するか） | |
-| LabSales_c の Orders 件数（オンプレと一致するか） | |
-| `vw_OrderWithCustomer` オブジェクト自体の有無 | ☐あり ☐なし |
-| `vw_OrderWithCustomer` 実行結果 | ☐正常 ☐エラー（内容: ） |
+| LabCustomer_c の件数（オンプレと一致するか） | ☑一致（インポート成功） |
+| LabSales_c の Orders 件数（オンプレと一致するか） | ☑不一致：0件（オンプレは2件）。Viewエラーでインポートがデータ投入前に中断したため |
+| `vw_OrderWithCustomer` オブジェクト自体の有無 | ☐あり ☑なし（`SELECT * FROM sys.views WHERE name = 'vw_OrderWithCustomer'` が0件） |
+| `vw_OrderWithCustomer` 実行結果 | 該当なし（オブジェクトが存在しないため実行不可） |
 
 ### STEP B6｜方式C用リソースの削除
 
@@ -336,17 +371,7 @@ az sql db delete --resource-group rg-sqldb-verify-lab --server sql-verify-target
 
 Part Bと同様に、`LabCustomer_d` / `LabSales_d` を作成します（無料データベースオファーはこちらに付け替え可）。
 
-### STEP C2｜Azure Storage Account 作成
-
-```bash
-az storage account create \
-  --resource-group rg-sqldb-verify-lab \
-  --name stsqldbverifylab \
-  --location japaneast \
-  --sku Standard_LRS
-```
-
-### STEP C3｜DataMigration リソースプロバイダー登録
+### STEP C2｜DataMigration リソースプロバイダー登録
 
 初回のみ必要です（登録済みならスキップ）。
 
@@ -357,9 +382,9 @@ az provider show --namespace Microsoft.DataMigration --query registrationState
 
 `Registered` になるまで待ちます。
 
-### STEP C4｜Azure DMS インスタンス作成
+### STEP C3｜Azure DMS インスタンス作成
 
-Portal →「Azure Database Migration Service」→「作成」。[02-sql-db-dms-offline.md](./02-sql-db-dms-offline.md) STEP 5 と同じ新UIの手順です。
+Portal →「Azure Database Migration Service」→「作成」。[02-sql-db-dms-offline.md](./02-sql-db-dms-offline.md) STEP 4 と同じ新UIの手順です。
 
 | 項目 | 設定値 |
 |---|---|
@@ -370,7 +395,7 @@ Portal →「Azure Database Migration Service」→「作成」。[02-sql-db-dms
 
 > **作成後、検証が終わり次第すぐ削除すること**（課金対象）。
 
-### STEP C5｜SHIR を vm-onprem-sim にインストール・登録
+### STEP C4｜SHIR を vm-onprem-sim にインストール・登録
 
 個人検証のため、SQL Serverと同じVMにSHIRを同居させます（本番の03手順書では非推奨ですが、検証用途では問題ありません）。
 
@@ -383,23 +408,25 @@ https://aka.ms/sql-migration-shir-download
 疎通確認：
 
 ```cmd
-sqlcmd -S localhost -U sa -P （パスワード） -Q "SELECT @@VERSION"
+sqlcmd -S localhost -U sa -P （パスワード） -C -Q "SELECT @@VERSION"
 ```
 
-### STEP C6｜移行プロジェクトを作成・実行
+### STEP C5｜移行プロジェクトを作成・実行
 
-[02-sql-db-dms-offline.md](./02-sql-db-dms-offline.md) STEP 7 と同じ手順で、`LabCustomer` と `LabSales` を **両方選択**して一括移行します。
+[02-sql-db-dms-offline.md](./02-sql-db-dms-offline.md) STEP 6 と同じ手順で、`LabCustomer` と `LabSales` を **両方選択**して一括移行します。
+
+> **ソース接続のユーザーも `sa`**：DMSウィザードの「ソースの詳細」画面はSQL Server認証で接続するため、STEP A3で有効化した`sa`ユーザー（同じパスワード）を使います。「ソースSQL Serverへの接続」画面に証明書関連のオプション（暗号化・証明書を信頼する 等）が表示された場合は、SSMS・SqlPackageと同じ理由（VMの自己署名証明書）でオンにしてください。
 
 - 「不足しているスキーマの移行」を **ON** にする
 - ソース→ターゲットのマッピング：`LabCustomer → LabCustomer_d`、`LabSales → LabSales_d`
 
 「移行の開始」をクリックします。
 
-### STEP C7｜進捗を監視
+### STEP C6｜進捗を監視
 
 DMSインスタンスの「移行の監視」画面でDB単位・テーブル単位の進捗を確認します。ラボ規模のデータなので数分で完了するはずです。
 
-### STEP C8｜動作確認（検証ポイント③）
+### STEP C7｜動作確認（検証ポイント③）
 
 ```sql
 -- LabSales_d に接続して実行
@@ -409,26 +436,24 @@ SELECT * FROM dbo.Orders;
 SELECT * FROM dbo.vw_OrderWithCustomer;
 ```
 
-> **想定される挙動**：DMSの「不足しているスキーマの移行」でView定義がそのままターゲットに作成される可能性がありますが、SqlPackage方式と同様、実行時にAzure SQL Databaseのクロスデータベース参照エラーになる可能性が高いです。あるいはスキーマ作成自体がスキップ/エラーになるケースも考えられます。どちらになるかを実際に確認してください。
+> **実測結果**：SqlPackage方式と同じ`Msg 40515`相当のエラー（`Reference to database and/or server name in 'LabSales.dbo.Orders' is not supported in this version of SQL Server.`）で`vw_OrderWithCustomer`の作成が"Deployed failure"となりました。
+> **方式Cとの決定的な違い**：SqlPackageはView失敗と同時にインポート全体（データ投入含む）が中断したのに対し、DMSは`dbo.Orders`のデータ移行を最後まで完走し、オンプレと同じ2件が投入されました。02-sql-db-dms-offline.mdの既知の制限事項にある「テーブル オブジェクトに問題がない限り、スキーマの移行でエラーが発生した場合でも、DMS はデータ移行フェーズに進みます」という記述通りの挙動です。**Viewだけが部分的に失敗し、テーブルデータは正常に移行される**という、方式Cより実用的な壊れ方をしています。
 
 #### 検証結果記録欄
 
 | 確認項目 | 結果 |
 |---|---|
-| LabCustomer_d の件数（オンプレと一致するか） | |
-| LabSales_d の Orders 件数（オンプレと一致するか） | |
-| 移行ステータス（Succeeded / エラーの有無） | |
-| `vw_OrderWithCustomer` オブジェクト自体の有無 | ☐あり ☐なし |
-| `vw_OrderWithCustomer` 実行結果 | ☐正常 ☐エラー（内容: ） |
+| LabCustomer_d の件数（オンプレと一致するか） | ☑一致：2件（初回はデータコピーフェーズが進行せず中断。原因はVM`Standard_B2s`がSHIR推奨最小スペック[4コア/8GB RAM]未満だったためと推定。リトライで成功。クロスDB参照Viewの検証とは無関係のインフラ制約） |
+| LabSales_d の Orders 件数（オンプレと一致するか） | ☑一致：2件（Viewは失敗したがデータ移行は完走） |
+| 移行ステータス（Succeeded / エラーの有無） | Deployed failure（`vw_OrderWithCustomer`のスキーマ展開のみ失敗、テーブルデータは移行済み） |
+| `vw_OrderWithCustomer` オブジェクト自体の有無 | ☐あり ☑なし（デプロイエラーで作成自体が失敗） |
+| `vw_OrderWithCustomer` 実行結果 | 該当なし（オブジェクトが存在しないため実行不可） |
 
-### STEP C9｜方式D用リソースの削除
+### STEP C8｜方式D用リソースの削除
 
 ```bash
 # DMSインスタンス削除（Portalから、または）
 az dms delete --resource-group rg-sqldb-verify-lab --name （DMSインスタンス名） --yes
-
-# Storage Account削除
-az storage account delete --resource-group rg-sqldb-verify-lab --name stsqldbverifylab --yes
 ```
 
 SHIRはVM上からアンインストール（VM自体を残す場合）。VMごと削除するなら不要です。
@@ -441,12 +466,12 @@ SHIRはVM上からアンインストール（VM自体を残す場合）。VMご�
 
 | 観点 | 方式C（SqlPackage） | 方式D（DMS + SHIR） |
 |---|---|---|
-| 通常DB（LabCustomer）の移行 | | |
-| クロスDB参照Viewを含むDB（LabSales）の移行そのもの | ☐成功 ☐失敗 | ☐成功 ☐失敗 |
-| Viewオブジェクトの作成有無 | | |
-| Viewクエリ実行時の挙動 | | |
-| エラーが出たタイミング（移行時／クエリ実行時） | | |
-| 個人的な所感・気づき | | |
+| 通常DB（LabCustomer）の移行 | ☑成功（件数一致） | ☑成功（件数一致。初回はVM`Standard_B2s`のスペック不足でデータコピーが停滞したが、原因はインフラ側でありDMSの挙動とは無関係） |
+| クロスDB参照Viewを含むDB（LabSales）の移行そのもの | ☑失敗（View作成エラーと同時にインポート全体が中断し、`Orders`のデータも0件のまま） | **部分的成功**（Viewの作成のみ失敗。`Orders`テーブルのデータ移行は完走しオンプレと件数一致） |
+| Viewオブジェクトの作成有無 | ☐あり ☑なし | ☐あり ☑なし |
+| Viewクエリ実行時の挙動 | 該当なし（オブジェクト自体が存在せず実行不可） | 該当なし（オブジェクト自体が存在せず実行不可） |
+| エラーが出たタイミング（移行時／クエリ実行時） | **移行時**（`SqlPackage /Action:Import`実行中、`SQL72014`/`Msg 40515`で`CREATE VIEW`が失敗し、データ投入前にインポート全体が中断） | **移行時**（スキーマ展開中に`Msg 40515`相当のエラーで`CREATE VIEW`のみ失敗。ただしテーブルのデータ移行フェーズは中断せず継続） |
+| 個人的な所感・気づき | 失敗したオブジェクトが1つでもあるとインポート全体をロールバック/中断する「全か無か」の挙動。部分的に健全な`Orders`テーブルのデータすら移行されなかった。 | 「不足しているスキーマの移行でエラーが出てもデータ移行フェーズには進む」という設計（公式ドキュメント記載）の通り、Viewだけを切り離して他のオブジェクトを移行できた。エラーの根本原因（Azure SQL Databaseエンジンがクロスデータベース参照を拒否する）自体は方式Cと共通だが、複数テーブル・複数オブジェクトを含む実際の移行では、問題のあるオブジェクトだけ後から個別対応できる方式Dの方が実用的。 |
 
 > クロスDB参照Viewが方式C・Dいずれでも正常に動かない場合、Azure SQL Databaseへの移行では「クロスDB参照を持つオブジェクトは移行前に設計変更が必要」という結論になります。代替案としては、Elastic Database Query（外部テーブル化）への置き換え、あるいはクロスDB参照が必要なワークロードは Azure SQL Managed Instance（[03-sql-mi-native-backup.md](./03-sql-mi-native-backup.md) / [04-sql-mi-dms-offline.md](./04-sql-mi-dms-offline.md)）を選ぶ、という判断が実務での落としどころになります。
 
@@ -467,7 +492,6 @@ az group delete --name rg-sqldb-verify-lab --yes --no-wait
 | VM（vm-onprem-sim）＋ディスク＋NIC＋Public IP | リソースグループ削除に含まれる |
 | VNet | リソースグループ削除に含まれる |
 | Azure SQL 論理サーバー・DB全て | リソースグループ削除に含まれる |
-| Storage Account | Part C で削除済みでなければ含まれる |
 | Azure DMS インスタンス | Part C で削除済みでなければ含まれる |
 
 > ⚠️ `az group delete` は不可逆な操作です。実行前に必要なログ・検証結果メモを別途保存してから実行してください。
@@ -502,13 +526,12 @@ az network vnet delete --resource-group rg-sqldb-verify-lab --name vnet-verify-l
 
 ### 方式D検証（Part C）
 - [ ] Azure SQL Database（LabCustomer_d / LabSales_d）作成
-- [ ] Storage Account作成
 - [ ] Microsoft.DataMigration登録確認
 - [ ] DMSインスタンス作成
 - [ ] SHIRインストール・登録（VM同居）
 - [ ] 移行プロジェクト実行（複数DB一括）
 - [ ] クロスDB Viewの動作確認・結果記録
-- [ ] DMS・Storage削除
+- [ ] DMS削除
 
 ### 総括・後片付け
 - [ ] 総合比較表を記入
