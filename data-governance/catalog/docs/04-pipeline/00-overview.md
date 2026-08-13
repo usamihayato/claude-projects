@@ -193,3 +193,4 @@ extraction/ に格納する JSON：
 |---|---|
 | [01-stage-to-bronze.sql](01-stage-to-bronze.sql) | structured CSV / JSON → Bronze 取り込みプロシージャ |
 | [02-bronze-to-silver.sql](02-bronze-to-silver.sql) | 名寄せ・正規化・競合検知のストアドプロシージャ |
+| [03-silver-description-generation-sample.sql](03-silver-description-generation-sample.sql) | Bronze原文（主根拠）＋Cortex Search社内ガイドRAG（参考情報）による列説明文候補（`COLUMN_DESCRIPTION_CANDIDATE`）生成のお試し実装サンプル（1テーブル分） |

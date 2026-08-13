@@ -100,6 +100,42 @@ Bronze → Silver → Gold へ情報を変換していく際の抽出ルール�
 - 競合フラグ・要確認フラグ
 - 集約元となったBronzeレコードのID一覧（トレーサビリティ確保のため）
 
+`STG_COLUMN_CANDIDATE` を `TABLE_PHYSICAL_NAME` でグルーピングして参照すれば、複数ソースの
+歯抜けを埋めて完成させた「実テーブル単位のカタログ（テーブル定義書相当）」としてそのまま
+利用できる。この用途のための新規テーブルは設計しない（詳細は
+[03-schema-design/01-architecture.md](../03-schema-design/01-architecture.md) 7章を参照）。
+
+### 4.4 列の説明文生成（生成AIによる要約）
+
+区分値の要約（`CODE_VALUE_SUMMARY`、5章参照）とは別に、列そのものの説明文
+（`COLUMN_DESCRIPTION`）についても、Bronze→Silverの名寄せバッチ内で生成AIにより
+下書きを生成する。
+
+- **生成タイミング**：`STG_COLUMN_CANDIDATE` の生成（4.2の名寄せ処理）と同一バッチ内で行い、
+  生成結果は `STG_COLUMN_CANDIDATE.COLUMN_DESCRIPTION_CANDIDATE` に格納する
+- **入力スコープ（主根拠）**：当該テーブル物理名・列物理名に紐づく `SOURCE_RAW_IDS`
+  （4.1の名寄せ単位）のBronze原文（`BRONZE.RAW_COLUMN_DEFINITION.RAW_CONTENT` 等）を
+  主根拠とする。名寄せ単位に紐づかない情報（他列・他テーブルの原文、モデルの一般知識）を
+  根拠にしない
+- **入力スコープ（補助情報：社内ガイドRAG）**：Bronze原文に加えて、別途整備済みの社内向け
+  ガイドページのパース済みテーブルを対象に、Snowflake Cortex Searchで名寄せ後の日本語論理名
+  候補（`COLUMN_LOGICAL_NAME_CANDIDATE`）をクエリとして検索し、上位数件をプロンプトに含める。
+  ただし社内ガイドの検索結果は「Bronze原文（主根拠）の理解を補うための参考情報」と位置づけ、
+  Bronze原文と明確に区別してプロンプトに渡す（説明文の根拠そのものにはしない）
+- **プロンプト方針**：Bronze原文を主根拠とし、社内ガイドの検索結果はBronze原文の理解を補う
+  目的でのみ利用するよう明示的に指示する。両方に記載のない情報を推測して補わないよう指示し、
+  原文からは列の意味を判断できない場合は、その旨を出力させ空欄のまま次工程に回す
+- **出自メタ情報の保持**：生成主体（`AI`/`HUMAN`）・使用モデルバージョン・生成日時を
+  `DESCRIPTION_GENERATED_BY` / `DESCRIPTION_MODEL_VERSION` / `DESCRIPTION_GENERATED_AT` として
+  `STG_COLUMN_CANDIDATE` に保持する
+- **社内ガイド参照のトレーサビリティに関する留意点**：社内ガイドのパース済みテーブルは
+  Bronze層（`SOURCE_RAW_IDS` によるトレーサビリティ）の対象外であり、どのガイドページを
+  参考にしたかを機械的に遡ることは（本設計の範囲では）できない。社内ガイドを「参考情報」に
+  留め「主根拠にしない」プロンプト設計としているのはこのため。ガイド参照自体の引用・
+  追跡が必要になった場合は、別途カラム追加等を検討する（8章）
+- 区分値の要約（`CODE_VALUE_SUMMARY`）は既存レコードからのテンプレート的な機械生成である一方、
+  列の説明文は自由記述の生成AI要約であり、性質が異なる別の生成プロセスとして扱う
+
 ## 5. 確定ルール（Silver層 → Gold層）
 
 - 競合フラグ・要確認フラグが立っていないレコードは、自動的にGold層へ昇格可能とする
@@ -112,10 +148,33 @@ Bronze → Silver → Gold へ情報を変換していく際の抽出ルール�
   基づくものかを常に追跡可能とする
 - 区分値を持つ列については、`GOLD.DIM_CODE_VALUE_MASTER` の現在有効なレコードから
   `コード値: 表示ラベル` 形式の要約文字列を機械的に生成し、`GOLD.DIM_COLUMN_MASTER.
-  CODE_VALUE_SUMMARY` に反映する。生成した要約と人手による説明文（`COLUMN_DESCRIPTION`）
+  CODE_VALUE_SUMMARY` に反映する。生成した要約と説明文（`COLUMN_DESCRIPTION`）
   は別カラムとして保持し、どちらをどう見せるか（要約のみ／説明文と合成 等）は最終成果物の
   利用者側の選択に委ねる。区分値マスタが更新されるたびに、この要約も同一バッチ内で
   再生成する
+- `STG_COLUMN_CANDIDATE.COLUMN_DESCRIPTION_CANDIDATE`（4.4）は、列名・区分値の名寄せ結果とは
+  異なり複数ソース間の競合という概念を持たない（1つの名寄せ単位につき生成AIが1件のみ生成する）
+  ため、`CONFLICT_FLAG`・`NEEDS_REVIEW_FLAG` の判定対象にはしない。生成され次第、列名・区分値の
+  確定と同じGold昇格タイミングで `GOLD.DIM_COLUMN_MASTER.COLUMN_DESCRIPTION` へそのまま反映する
+  （人手レビューを昇格のブロッキングゲートにはしない）
+- 説明文の出自メタ情報（`DESCRIPTION_GENERATED_BY` / `DESCRIPTION_MODEL_VERSION` /
+  `DESCRIPTION_GENERATED_AT`）は `STG_COLUMN_CANDIDATE` から `GOLD.DIM_COLUMN_MASTER` へ
+  そのまま引き継ぎ、Gold層の利用者側でAI生成か人手修正済みかを判別できるようにする
+
+### 5.1 品質担保（抜き取り監査）
+
+AI生成の `COLUMN_DESCRIPTION` は昇格をブロックする人手レビューを設けない代わりに、事後の
+抜き取り監査によって継続的に品質を確認する。
+
+1. 定期的（頻度は別途決定。8章参照）に `GOLD.DIM_COLUMN_MASTER` の現在有効なレコードから
+   一定件数（サンプル件数は別途決定）をランダムサンプリングする
+2. 監査担当者がサンプリングされたレコードの `COLUMN_DESCRIPTION` を確認し、判定結果
+   （`妥当` / `要修正` / `誤り`）を `META.AI_DESCRIPTION_AUDIT_LOG` に記録する
+3. `要修正` / `誤り` と判定されたレコードは、監査担当者が `CORRECTED_DESCRIPTION` に修正案を
+   記録した上で、`GOLD.DIM_COLUMN_MASTER.COLUMN_DESCRIPTION` を更新し
+   `DESCRIPTION_GENERATED_BY = 'HUMAN'` に切り替える
+4. 監査結果の傾向（誤りが多いソース種別・パターン等）は、4.4のプロンプト改修へのフィードバック
+   として活用する
 
 ## 6. 更新運用（源流システム変更への追従）
 
@@ -185,4 +244,10 @@ Bronze → Silver → Gold へ情報を変換していく際の抽出ルール�
   利用者要件を踏まえて別途検討する
 - 抽出処理でのAI機能（Cortex等）活用の具体的な実装方式（利用する関数・プロンプト設計等）は
   別途検討する
+- 列の説明文生成（4.4）のプロンプト詳細・使用モデルは別途決定する
+- 抜き取り監査（5.1）の実行頻度・1回あたりのサンプル件数は別途決定する
+- 社内ガイドRAG（4.4）で検索対象とするパース済みガイドテーブルの所在・列構成、および
+  Cortex Search Serviceの設計（検索対象列・付帯属性・WAREHOUSE・TARGET_LAG等）は別途決定する
+- 社内ガイド参照の引用・トレーサビリティ（どのガイドページを参考にしたかの記録）が必要かは、
+  抜き取り監査（5.1）の運用状況を踏まえて別途判断する
 - 再収集の実行方式（バッチジョブ／CI連携等）は別途、実装方式検討時に確定する

@@ -14,8 +14,11 @@ CREATE TABLE IF NOT EXISTS DG_CATALOG.GOLD.DIM_COLUMN_MASTER (
     COLUMN_PHYSICAL_NAME  VARCHAR(200)    NOT NULL,
     COLUMN_LOGICAL_NAME   VARCHAR(500)    NOT NULL,          -- 確定した論理名（業務名）
     DATA_TYPE              VARCHAR(100),                     -- 列のデータ型（実データカタログの形式に合わせて保持）
-    COLUMN_DESCRIPTION    VARCHAR(1000),                      -- 人手による説明文
+    COLUMN_DESCRIPTION    VARCHAR(1000),                      -- 生成AIによる説明文の要約（抜き取り監査で修正した場合はその内容）
     CODE_VALUE_SUMMARY     VARCHAR(4000),                     -- DIM_CODE_VALUE_MASTERから機械生成した区分値要約（例: 01: ABCD, 02: EFGH）
+    DESCRIPTION_GENERATED_BY   VARCHAR(50),                    -- COLUMN_DESCRIPTIONの生成主体。AI / HUMAN
+    DESCRIPTION_MODEL_VERSION  VARCHAR(200),                   -- 使用したCortexモデル名・バージョン（AI生成時のみ）
+    DESCRIPTION_GENERATED_AT   TIMESTAMP_NTZ,                  -- COLUMN_DESCRIPTIONの生成日時
     VALID_FROM            DATE            NOT NULL,
     VALID_TO              DATE,                              -- NULL = 現在有効
     IS_CURRENT             BOOLEAN         DEFAULT TRUE,
@@ -43,6 +46,21 @@ CREATE TABLE IF NOT EXISTS DG_CATALOG.GOLD.DIM_CODE_VALUE_MASTER (
     SOURCE_STG_ID             NUMBER          REFERENCES DG_CATALOG.SILVER.STG_CODE_VALUE_CANDIDATE(STG_ID),
     REVIEWED_BY               VARCHAR(200)    DEFAULT 'SYSTEM',
     REVIEWED_AT               TIMESTAMP_NTZ,
+    CREATED_AT                TIMESTAMP_NTZ   DEFAULT CURRENT_TIMESTAMP()
+);
+
+-- ----------------------------------------------------------------------------
+-- META: AI生成説明文の抜き取り監査ログ
+--   GOLD.DIM_COLUMN_MASTER 作成後に定義（FK依存のため本ファイル内に配置）
+-- ----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS DG_CATALOG.META.AI_DESCRIPTION_AUDIT_LOG (
+    AUDIT_ID                NUMBER          AUTOINCREMENT PRIMARY KEY,
+    COLUMN_MASTER_ID         NUMBER          REFERENCES DG_CATALOG.GOLD.DIM_COLUMN_MASTER(COLUMN_MASTER_ID),
+    SAMPLED_AT                TIMESTAMP_NTZ  NOT NULL,
+    AUDITOR                   VARCHAR(200)    NOT NULL,
+    VERDICT                   VARCHAR(50)     NOT NULL,        -- 妥当 / 要修正 / 誤り
+    CORRECTED_DESCRIPTION     VARCHAR(1000),                   -- 要修正・誤りの場合の修正案
+    REMARKS                   VARCHAR(1000),
     CREATED_AT                TIMESTAMP_NTZ   DEFAULT CURRENT_TIMESTAMP()
 );
 

@@ -114,11 +114,38 @@ DATABASE: DG_CATALOG
 - 実データカタログの形式に合わせ、`DIM_COLUMN_MASTER` に `DATA_TYPE`（データ型）列を追加する
 - 区分値を持つ列については、`DIM_CODE_VALUE_MASTER` の現在有効なレコードから
   `コード値: 表示ラベル` 形式の要約文字列を機械的に生成し、`DIM_COLUMN_MASTER.CODE_VALUE_SUMMARY`
-  として保持する。生成した要約と人手による説明文（`COLUMN_DESCRIPTION`）は別カラムとして
+  として保持する。生成した要約と説明文（`COLUMN_DESCRIPTION`）は別カラムとして
   保持し、最終的にどちらをどう見せるか（要約のみ／説明文と合成 等）は利用者側の成果物
   選択に委ねる
 - 区分値マスタが更新バッチで最新化されるたびに、`CODE_VALUE_SUMMARY` も同一バッチ内で
   再生成する（手動でのコピー・同期作業は発生させない）
+- `COLUMN_DESCRIPTION` は `CODE_VALUE_SUMMARY` とは異なり、生成AI（Snowflake Cortex）が
+  Bronze層の原文（`SOURCE_RAW_IDS` で紐づく該当列の抽出結果のみ）を根拠に要約生成する。
+  Silver層構築までが自動バッチ処理であるため、昇格をブロックする人手レビューは設けず、
+  代わりに生成主体・モデルバージョン・生成日時を `DESCRIPTION_GENERATED_BY` /
+  `DESCRIPTION_MODEL_VERSION` / `DESCRIPTION_GENERATED_AT` としてGoldまで保持し、事後の
+  抜き取り監査（`META.AI_DESCRIPTION_AUDIT_LOG`）で継続的に品質を確認する運用とする。
+  詳細ルールは
+  [02-data-transformation/01-conversion-policy.md](../02-data-transformation/01-conversion-policy.md)
+  4.4節・5.1節を参照
+
+## 7. 実テーブル単位カタログ（テーブル定義書相当）の扱い
+
+「実テーブルごとに列一覧・説明をまとめたカタログ（テーブル定義書のような一覧）」は、
+新規のテーブルを追加設計する必要はなく、既存のBronze→Silver→Goldの枠組みでそのまま
+表現できる。
+
+- 個別ソース（設計書・ソースコード・画面定義等）から抽出した、あるテーブルについての
+  歯抜けの列情報は、通常どおり `BRONZE.RAW_COLUMN_DEFINITION` に格納する
+- 複数ソースを組み合わせて歯抜けを埋め、1テーブル分の列情報を完成させる処理は、
+  `SILVER.STG_COLUMN_CANDIDATE` の名寄せ処理（[02-data-transformation/01-conversion-policy.md](../02-data-transformation/01-conversion-policy.md)
+  4章）がすでに担っている。`STG_COLUMN_CANDIDATE` を `TABLE_PHYSICAL_NAME` でグルーピングして
+  参照すれば、そのままテーブル定義書相当の一覧として利用できる
+- 確定後は `GOLD.DIM_COLUMN_MASTER` を `TABLE_PHYSICAL_NAME` でグルーピングして参照すれば、
+  確定版のテーブル単位カタログとなる
+- 複数のBronzeレコードを掛け合わせて1件を完成させる処理は、定義上Silver層の役割である
+  （Bronze層は出典1件に対して1件が対応する生データのままとし、他Bronzeレコードとの合成は
+  行わない。3章のトレーサビリティ担保・Bronzeの不変性の前提を維持するため）
 
 詳細な抽出ルール・名寄せルール・競合解決ルールは
 [02-data-transformation/01-conversion-policy.md](../02-data-transformation/01-conversion-policy.md) を参照。

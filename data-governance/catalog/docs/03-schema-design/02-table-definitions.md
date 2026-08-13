@@ -32,6 +32,23 @@
 | STATUS | VARCHAR | `実行中` / `成功` / `失敗` |
 | REMARKS | VARCHAR | 備考（失敗時のエラー内容等） |
 
+### 1.3 `META.AI_DESCRIPTION_AUDIT_LOG`（AI生成説明文の抜き取り監査ログ）
+
+生成AIによる `COLUMN_DESCRIPTION` の品質を、全件レビューではなく事後の抜き取り監査で
+継続的に確認するためのログ。詳細な運用ルールは
+[02-data-transformation/01-conversion-policy.md](../02-data-transformation/01-conversion-policy.md) 5章を参照。
+
+| 列名 | 型 | 説明 |
+|---|---|---|
+| AUDIT_ID | NUMBER | PK |
+| COLUMN_MASTER_ID | NUMBER | FK: `GOLD.DIM_COLUMN_MASTER`（監査対象レコード） |
+| SAMPLED_AT | TIMESTAMP_NTZ | サンプリング日時 |
+| AUDITOR | VARCHAR | 監査担当者 |
+| VERDICT | VARCHAR | `妥当` / `要修正` / `誤り` のいずれか |
+| CORRECTED_DESCRIPTION | VARCHAR | 修正後の説明文（`要修正`/`誤り`の場合） |
+| REMARKS | VARCHAR | 備考 |
+| CREATED_AT | TIMESTAMP_NTZ | ログ登録日時 |
+
 ## 2. BRONZE スキーマ（メタ情報付き生データ）
 
 ### 2.1 `BRONZE.RAW_COLUMN_DEFINITION`（列名定義の抽出結果）
@@ -86,6 +103,10 @@
 | NEEDS_REVIEW_FLAG | BOOLEAN | 該当ソースが1件のみ等、要確認の場合に `TRUE` |
 | CANDIDATE_VALUES | VARIANT | 各ソースでの値・優先度・出典の一覧（競合内容の詳細） |
 | SOURCE_RAW_IDS | ARRAY | 集約元となった `BRONZE.RAW_COLUMN_DEFINITION.RAW_ID` の一覧 |
+| COLUMN_DESCRIPTION_CANDIDATE | VARCHAR | 生成AIによる列の説明文候補（`SOURCE_RAW_IDS` に紐づくBronze原文の範囲内で要約） |
+| DESCRIPTION_GENERATED_BY | VARCHAR | 説明文候補の生成主体。`AI` / `HUMAN` |
+| DESCRIPTION_MODEL_VERSION | VARCHAR | 生成に使用したCortexモデル名・バージョン（AI生成時のみ） |
+| DESCRIPTION_GENERATED_AT | TIMESTAMP_NTZ | 説明文候補の生成日時 |
 | MATCHING_BATCH_ID | NUMBER | FK: `META.COLLECTION_BATCH`（名寄せ実行バッチ） |
 | UPDATED_AT | TIMESTAMP_NTZ | 更新日時 |
 
@@ -121,8 +142,11 @@
 | COLUMN_PHYSICAL_NAME | VARCHAR | 対象列物理名 |
 | COLUMN_LOGICAL_NAME | VARCHAR | 確定した論理名（業務名） |
 | DATA_TYPE | VARCHAR | 列のデータ型（実データカタログの形式に合わせて保持） |
-| COLUMN_DESCRIPTION | VARCHAR | 列の説明（人手による説明文） |
+| COLUMN_DESCRIPTION | VARCHAR | 列の説明（生成AIによる要約。抜き取り監査等で人手により修正した場合はその内容。`DESCRIPTION_GENERATED_BY` で判別） |
 | CODE_VALUE_SUMMARY | VARCHAR | `DIM_CODE_VALUE_MASTER` の現在有効なレコードから機械的に生成した区分値要約（例：`01: ABCD, 02: EFGH`）。区分値マスタの更新時に同一バッチ内で再生成する。`COLUMN_DESCRIPTION` とは別カラムとして保持し、最終的な表示形式は利用者側の成果物選択に委ねる |
+| DESCRIPTION_GENERATED_BY | VARCHAR | `COLUMN_DESCRIPTION` の生成主体。`AI` / `HUMAN`（`SILVER.STG_COLUMN_CANDIDATE` から引き継ぎ） |
+| DESCRIPTION_MODEL_VERSION | VARCHAR | 生成に使用したCortexモデル名・バージョン（AI生成時のみ） |
+| DESCRIPTION_GENERATED_AT | TIMESTAMP_NTZ | `COLUMN_DESCRIPTION` の生成日時 |
 | VALID_FROM | DATE | 有効開始日 |
 | VALID_TO | DATE | 有効終了日（現在有効な場合は `NULL`） |
 | IS_CURRENT | BOOLEAN | 現在有効なレコードかどうか |
