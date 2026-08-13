@@ -239,7 +239,11 @@ AI生成の `COLUMN_DESCRIPTION` は昇格をブロックする人手レビュ�
 - コードマスタ(Excel)とテーブル物理名・列物理名との対応がシート内に明記されていない
   場合の補完方法（設計書との突き合わせルール）は、実データを確認した上で具体化する
 - 対象DBの実テーブル・実列を対象に並行整備される「実データカタログ」との付け合わせ運用
-  （突き合わせ方式・不一致時の扱い）は、実データカタログ側の整備状況を踏まえて具体化する
+  （突き合わせ方式・不一致時の扱い）は、実データカタログ側の整備状況を踏まえて具体化する。
+  突き合わせキー（`TABLE_PHYSICAL_NAME` + `COLUMN_PHYSICAL_NAME`）と反映先カラム
+  （`DIM_COLUMN_MASTER.DATA_LENGTH`/`KEY_TYPE`/`IS_NULLABLE`/`ORDINAL_POSITION`、[03-schema-design/01-architecture.md](../03-schema-design/01-architecture.md)
+  6章参照）は決定済みだが、実データカタログ側の実テーブル名・列構成・更新バッチ方式は
+  本ワークスペース外で管理されるため未確定
 - 最終成果物（`CODE_VALUE_SUMMARY` と `COLUMN_DESCRIPTION` の見せ方）の選択肢自体の設計は、
   利用者要件を踏まえて別途検討する
 - 抽出処理でのAI機能（Cortex等）活用の具体的な実装方式（利用する関数・プロンプト設計等）は

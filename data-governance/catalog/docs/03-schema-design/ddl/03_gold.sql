@@ -14,11 +14,16 @@ CREATE TABLE IF NOT EXISTS DG_CATALOG.GOLD.DIM_COLUMN_MASTER (
     COLUMN_PHYSICAL_NAME  VARCHAR(200)    NOT NULL,
     COLUMN_LOGICAL_NAME   VARCHAR(500)    NOT NULL,          -- 確定した論理名（業務名）
     DATA_TYPE              VARCHAR(100),                     -- 列のデータ型（実データカタログの形式に合わせて保持）
+    DATA_LENGTH             VARCHAR(50),                      -- 列の桁数・長さ（例: 10、小数は10,2等）。実データカタログ由来
+    KEY_TYPE                VARCHAR(20),                      -- PK / FK / UK のいずれか。実データカタログ由来
+    IS_NULLABLE              BOOLEAN,                          -- NULL許可かどうか。実データカタログ由来
+    ORDINAL_POSITION         NUMBER,                           -- テーブル内での列の並び順。実データカタログ由来
     COLUMN_DESCRIPTION    VARCHAR(1000),                      -- 生成AIによる説明文の要約（抜き取り監査で修正した場合はその内容）
     CODE_VALUE_SUMMARY     VARCHAR(4000),                     -- DIM_CODE_VALUE_MASTERから機械生成した区分値要約（例: 01: ABCD, 02: EFGH）
     DESCRIPTION_GENERATED_BY   VARCHAR(50),                    -- COLUMN_DESCRIPTIONの生成主体。AI / HUMAN
     DESCRIPTION_MODEL_VERSION  VARCHAR(200),                   -- 使用したCortexモデル名・バージョン（AI生成時のみ）
     DESCRIPTION_GENERATED_AT   TIMESTAMP_NTZ,                  -- COLUMN_DESCRIPTIONの生成日時
+    PHYSICAL_SCHEMA_MATCHED_AT TIMESTAMP_NTZ,                  -- 実データカタログとの突合日時
     VALID_FROM            DATE            NOT NULL,
     VALID_TO              DATE,                              -- NULL = 現在有効
     IS_CURRENT             BOOLEAN         DEFAULT TRUE,

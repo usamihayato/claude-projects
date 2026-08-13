@@ -142,11 +142,16 @@
 | COLUMN_PHYSICAL_NAME | VARCHAR | 対象列物理名 |
 | COLUMN_LOGICAL_NAME | VARCHAR | 確定した論理名（業務名） |
 | DATA_TYPE | VARCHAR | 列のデータ型（実データカタログの形式に合わせて保持） |
+| DATA_LENGTH | VARCHAR | 列の桁数・長さ（例：`10`、小数は`10,2`等）。実データカタログ由来 |
+| KEY_TYPE | VARCHAR | `PK` / `FK` / `UK` のいずれか。該当しない場合は `NULL`。実データカタログ由来 |
+| IS_NULLABLE | BOOLEAN | NULL許可かどうか。実データカタログ由来 |
+| ORDINAL_POSITION | NUMBER | テーブル内での列の並び順。実データカタログ由来 |
 | COLUMN_DESCRIPTION | VARCHAR | 列の説明（生成AIによる要約。抜き取り監査等で人手により修正した場合はその内容。`DESCRIPTION_GENERATED_BY` で判別） |
 | CODE_VALUE_SUMMARY | VARCHAR | `DIM_CODE_VALUE_MASTER` の現在有効なレコードから機械的に生成した区分値要約（例：`01: ABCD, 02: EFGH`）。区分値マスタの更新時に同一バッチ内で再生成する。`COLUMN_DESCRIPTION` とは別カラムとして保持し、最終的な表示形式は利用者側の成果物選択に委ねる |
 | DESCRIPTION_GENERATED_BY | VARCHAR | `COLUMN_DESCRIPTION` の生成主体。`AI` / `HUMAN`（`SILVER.STG_COLUMN_CANDIDATE` から引き継ぎ） |
 | DESCRIPTION_MODEL_VERSION | VARCHAR | 生成に使用したCortexモデル名・バージョン（AI生成時のみ） |
 | DESCRIPTION_GENERATED_AT | TIMESTAMP_NTZ | `COLUMN_DESCRIPTION` の生成日時 |
+| PHYSICAL_SCHEMA_MATCHED_AT | TIMESTAMP_NTZ | `DATA_LENGTH` / `KEY_TYPE` / `IS_NULLABLE` / `ORDINAL_POSITION` を実データカタログと突き合わせた日時 |
 | VALID_FROM | DATE | 有効開始日 |
 | VALID_TO | DATE | 有効終了日（現在有効な場合は `NULL`） |
 | IS_CURRENT | BOOLEAN | 現在有効なレコードかどうか |
