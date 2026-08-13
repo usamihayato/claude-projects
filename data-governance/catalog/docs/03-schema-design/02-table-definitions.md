@@ -80,7 +80,7 @@
 | SOURCE_VERSION | VARCHAR | ドキュメントバージョン／コミットハッシュ |
 | TABLE_PHYSICAL_NAME | VARCHAR | 対象テーブル物理名 |
 | COLUMN_PHYSICAL_NAME | VARCHAR | 対象列物理名（区分値が格納される列） |
-| CONTEXT_COLUMN_NAME_RAW | VARCHAR | 区分値の意味を左右する判別列の物理名（同一テーブル内の別列。商品種別コード・国コード等）。コンテキストがない場合は `NULL` |
+| CONTEXT_NAME_RAW | VARCHAR | 区分値の意味を左右する判別列の物理名（同一テーブル内の別列。商品種別コード・国コード等）。コンテキストがない場合は `NULL` |
 | CONTEXT_VALUE_RAW | VARCHAR | 判別列の値（正規化前）。コンテキストがない場合は `NULL` |
 | CODE_VALUE | VARCHAR | 区分値（コード値。型が混在しうるため文字列で保持） |
 | CODE_LABEL_RAW | VARCHAR | 抽出された表示ラベル候補（正規化前） |
@@ -117,7 +117,7 @@
 | STG_ID | NUMBER | PK |
 | TABLE_PHYSICAL_NAME | VARCHAR | 対象テーブル物理名 |
 | COLUMN_PHYSICAL_NAME | VARCHAR | 対象列物理名 |
-| CONTEXT_COLUMN_NAME | VARCHAR | 判別列の物理名（正規化後）。コンテキストがない場合は `NULL`（共通） |
+| CONTEXT_NAME | VARCHAR | 判別列の物理名（正規化後）。コンテキストがない場合は `NULL`（共通） |
 | CONTEXT_VALUE | VARCHAR | 判別列の値（正規化後）。コンテキストがない場合は `NULL`（共通） |
 | CODE_VALUE | VARCHAR | 区分値（コード値） |
 | CODE_LABEL_CANDIDATE | VARCHAR | 名寄せ後の表示ラベル候補 |
@@ -160,15 +160,33 @@
 | REVIEWED_AT | TIMESTAMP_NTZ | レビュー・確定日時 |
 | CREATED_AT | TIMESTAMP_NTZ | Gold層への格納日時 |
 
-### 4.2 `GOLD.DIM_CODE_VALUE_MASTER`（区分値マスタ）
+### 4.2 `GOLD.DIM_CONTEXT_MASTER`（判別列＝コンテキストの値マスタ）
+
+判別列には2種類ある。(a) 対象DBに実在する物理列の値（例：`product_type_cd = '01'`）、
+(b) 実在する物理列がなく、本プロジェクト側で人手により分類したもの（`CONTEXT_NAME`に
+固定識別子、例 `MANUAL_PRODUCT_CLASSIFICATION` を用いる）。いずれの場合も表示名の自由記述に
+よる表記揺れを防ぐため、本マスタで一元管理する。
+
+| 列名 | 型 | 説明 |
+|---|---|---|
+| CONTEXT_MASTER_ID | NUMBER | PK |
+| CONTEXT_NAME | VARCHAR | 判別列の物理名（実在する場合）、または人手分類の固定識別子（実在しない場合） |
+| CONTEXT_VALUE | VARCHAR | 判別列の値、または分類コード（例：`COMMON`、`PRODUCT_A`）。`DIM_CODE_VALUE_MASTER.CONTEXT_VALUE`から参照される |
+| CONTEXT_LABEL | VARCHAR | 表示名（例：`共通`、`商品A`）。呼称変更はここだけで完結する |
+| IS_COMMON | BOOLEAN | コンテキストによらず共通適用される分類を表すレコードかどうか |
+| DESCRIPTION | VARCHAR | 分類の定義・判断根拠 |
+| CREATED_AT | TIMESTAMP_NTZ | 登録日時 |
+| UPDATED_AT | TIMESTAMP_NTZ | 更新日時 |
+
+### 4.3 `GOLD.DIM_CODE_VALUE_MASTER`（区分値マスタ）
 
 | 列名 | 型 | 説明 |
 |---|---|---|
 | CODE_VALUE_MASTER_ID | NUMBER | PK |
 | TABLE_PHYSICAL_NAME | VARCHAR | 対象テーブル物理名 |
 | COLUMN_PHYSICAL_NAME | VARCHAR | 対象列物理名 |
-| CONTEXT_COLUMN_NAME | VARCHAR | 判別列の物理名。コンテキストがない場合は `NULL`（共通） |
-| CONTEXT_VALUE | VARCHAR | 判別列の値。コンテキストがない場合は `NULL`（共通） |
+| CONTEXT_NAME | VARCHAR | 判別列の物理名、または人手分類の固定識別子。コンテキストがない場合は `NULL`（共通）。NULLでない場合は`DIM_CONTEXT_MASTER`で表示名を管理 |
+| CONTEXT_VALUE | VARCHAR | 判別列の値、または分類コード。コンテキストがない場合は `NULL`（共通）。NULLでない場合は`DIM_CONTEXT_MASTER`（CONTEXT_NAME+CONTEXT_VALUE）のFK相当 |
 | CODE_VALUE | VARCHAR | 区分値（コード値） |
 | CODE_LABEL | VARCHAR | 確定した表示ラベル |
 | CODE_DESCRIPTION | VARCHAR | 補足説明 |
@@ -199,7 +217,7 @@ LEFT JOIN DG_CATALOG.GOLD.DIM_CODE_VALUE_MASTER  AS code_m_ctx
        ON code_m_ctx.TABLE_PHYSICAL_NAME  = '対象テーブル'
       AND code_m_ctx.COLUMN_PHYSICAL_NAME = 'clm_stat_cd'
       AND code_m_ctx.CODE_VALUE           = src.clm_stat_cd
-      AND code_m_ctx.CONTEXT_COLUMN_NAME  = 'product_type_cd'
+      AND code_m_ctx.CONTEXT_NAME  = 'product_type_cd'
       AND code_m_ctx.CONTEXT_VALUE        = src.product_type_cd
       AND code_m_ctx.IS_CURRENT           = TRUE
 LEFT JOIN DG_CATALOG.GOLD.DIM_CODE_VALUE_MASTER  AS code_m_common

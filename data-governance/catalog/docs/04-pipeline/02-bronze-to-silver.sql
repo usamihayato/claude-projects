@@ -254,7 +254,7 @@ BEGIN
                 r.TABLE_PHYSICAL_NAME,
                 r.COLUMN_PHYSICAL_NAME,
                 -- 判別列の正規化（NULLはNULLのまま保持 = 共通扱い）
-                TRIM(r.CONTEXT_COLUMN_NAME_RAW) AS CONTEXT_COLUMN_NAME,
+                TRIM(r.CONTEXT_NAME_RAW) AS CONTEXT_NAME,
                 TRIM(r.CONTEXT_VALUE_RAW) AS CONTEXT_VALUE,
                 r.CODE_VALUE,
                 r.CODE_LABEL_RAW,
@@ -270,7 +270,7 @@ BEGIN
             SELECT
                 TABLE_PHYSICAL_NAME,
                 COLUMN_PHYSICAL_NAME,
-                CONTEXT_COLUMN_NAME,
+                CONTEXT_NAME,
                 CONTEXT_VALUE,
                 CODE_VALUE,
                 COUNT(DISTINCT RAW_ID) AS SOURCE_COUNT,
@@ -291,7 +291,7 @@ BEGIN
             GROUP BY
                 TABLE_PHYSICAL_NAME,
                 COLUMN_PHYSICAL_NAME,
-                CONTEXT_COLUMN_NAME,
+                CONTEXT_NAME,
                 CONTEXT_VALUE,
                 CODE_VALUE
         ),
@@ -304,7 +304,7 @@ BEGIN
                     FROM raw_with_priority rp
                     WHERE rp.TABLE_PHYSICAL_NAME  = g.TABLE_PHYSICAL_NAME
                       AND rp.COLUMN_PHYSICAL_NAME = g.COLUMN_PHYSICAL_NAME
-                      AND NVL(rp.CONTEXT_COLUMN_NAME, '___NULL___') = NVL(g.CONTEXT_COLUMN_NAME, '___NULL___')
+                      AND NVL(rp.CONTEXT_NAME, '___NULL___') = NVL(g.CONTEXT_NAME, '___NULL___')
                       AND NVL(rp.CONTEXT_VALUE, '___NULL___')       = NVL(g.CONTEXT_VALUE, '___NULL___')
                       AND rp.CODE_VALUE           = g.CODE_VALUE
                     ORDER BY rp.PRIORITY ASC
@@ -315,7 +315,7 @@ BEGIN
                     FROM raw_with_priority rp
                     WHERE rp.TABLE_PHYSICAL_NAME  = g.TABLE_PHYSICAL_NAME
                       AND rp.COLUMN_PHYSICAL_NAME = g.COLUMN_PHYSICAL_NAME
-                      AND NVL(rp.CONTEXT_COLUMN_NAME, '___NULL___') = NVL(g.CONTEXT_COLUMN_NAME, '___NULL___')
+                      AND NVL(rp.CONTEXT_NAME, '___NULL___') = NVL(g.CONTEXT_NAME, '___NULL___')
                       AND NVL(rp.CONTEXT_VALUE, '___NULL___')       = NVL(g.CONTEXT_VALUE, '___NULL___')
                       AND rp.CODE_VALUE           = g.CODE_VALUE
                     ORDER BY rp.PRIORITY ASC
@@ -324,20 +324,20 @@ BEGIN
             FROM grouped g
         ),
         -- 判別列の後発見検知:
-        -- 同一テーブル・列で CONTEXT_COLUMN_NAME IS NULL（共通）と
-        -- CONTEXT_COLUMN_NAME IS NOT NULL（コンテキスト付き）が共存する場合、
+        -- 同一テーブル・列で CONTEXT_NAME IS NULL（共通）と
+        -- CONTEXT_NAME IS NOT NULL（コンテキスト付き）が共存する場合、
         -- 共通側に NEEDS_REVIEW_FLAG を強制的に立てる
         context_detection AS (
             SELECT DISTINCT
                 TABLE_PHYSICAL_NAME,
                 COLUMN_PHYSICAL_NAME
             FROM best_candidate
-            WHERE CONTEXT_COLUMN_NAME IS NOT NULL
+            WHERE CONTEXT_NAME IS NOT NULL
         )
         SELECT
             bc.TABLE_PHYSICAL_NAME,
             bc.COLUMN_PHYSICAL_NAME,
-            bc.CONTEXT_COLUMN_NAME,
+            bc.CONTEXT_NAME,
             bc.CONTEXT_VALUE,
             bc.CODE_VALUE,
             bc.BEST_LABEL,
@@ -346,7 +346,7 @@ BEGIN
             -- 要確認: ソース1件のみ、または判別列の後発見による共通レコードの不正確化
             IFF(
                 bc.SOURCE_COUNT = 1
-                OR (bc.CONTEXT_COLUMN_NAME IS NULL AND cd.TABLE_PHYSICAL_NAME IS NOT NULL),
+                OR (bc.CONTEXT_NAME IS NULL AND cd.TABLE_PHYSICAL_NAME IS NOT NULL),
                 TRUE,
                 FALSE
             ) AS NEEDS_REVIEW_FLAG,
@@ -359,7 +359,7 @@ BEGIN
     ) AS src
     ON  tgt.TABLE_PHYSICAL_NAME  = src.TABLE_PHYSICAL_NAME
     AND tgt.COLUMN_PHYSICAL_NAME = src.COLUMN_PHYSICAL_NAME
-    AND NVL(tgt.CONTEXT_COLUMN_NAME, '___NULL___') = NVL(src.CONTEXT_COLUMN_NAME, '___NULL___')
+    AND NVL(tgt.CONTEXT_NAME, '___NULL___') = NVL(src.CONTEXT_NAME, '___NULL___')
     AND NVL(tgt.CONTEXT_VALUE, '___NULL___')       = NVL(src.CONTEXT_VALUE, '___NULL___')
     AND tgt.CODE_VALUE           = src.CODE_VALUE
     WHEN MATCHED THEN UPDATE SET
@@ -374,7 +374,7 @@ BEGIN
     WHEN NOT MATCHED THEN INSERT (
         TABLE_PHYSICAL_NAME,
         COLUMN_PHYSICAL_NAME,
-        CONTEXT_COLUMN_NAME,
+        CONTEXT_NAME,
         CONTEXT_VALUE,
         CODE_VALUE,
         CODE_LABEL_CANDIDATE,
@@ -388,7 +388,7 @@ BEGIN
     ) VALUES (
         src.TABLE_PHYSICAL_NAME,
         src.COLUMN_PHYSICAL_NAME,
-        src.CONTEXT_COLUMN_NAME,
+        src.CONTEXT_NAME,
         src.CONTEXT_VALUE,
         src.CODE_VALUE,
         src.BEST_LABEL,
@@ -474,7 +474,7 @@ $$;
 --     STG_ID,
 --     TABLE_PHYSICAL_NAME,
 --     COLUMN_PHYSICAL_NAME,
---     CONTEXT_COLUMN_NAME,
+--     CONTEXT_NAME,
 --     CONTEXT_VALUE,
 --     CODE_VALUE,
 --     CODE_LABEL_CANDIDATE,
