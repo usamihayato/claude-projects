@@ -1,0 +1,1371 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SnowPro Core 演習ツール</title>
+<style>
+/* ===== カラートークン（ライト） ===== */
+:root {
+  --bg: #f4f6f9;
+  --surface: #ffffff;
+  --surface-alt: #eef2f7;
+  --border: #d4dbe4;
+  --text: #1b2430;
+  --text-muted: #5c6a7a;
+  --accent: #1c7ed6;
+  --accent-weak: #e5f0fb;
+  --correct: #1a7f4b;
+  --correct-weak: #e2f5ea;
+  --wrong: #c0392b;
+  --wrong-weak: #fdeceb;
+  --radius: 10px;
+}
+/* ===== カラートークン（ダーク） ===== */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #171c23;
+    --surface: #1f262f;
+    --surface-alt: #262f3a;
+    --border: #3a4653;
+    --text: #e6ecf3;
+    --text-muted: #9aa8b8;
+    --accent: #4dabf7;
+    --accent-weak: #1d3348;
+    --correct: #51cf66;
+    --correct-weak: #1c3527;
+    --wrong: #ff8787;
+    --wrong-weak: #3a2222;
+  }
+}
+
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Noto Sans JP", "Meiryo", sans-serif;
+  line-height: 1.7;
+  font-size: 16px;
+}
+.wrap { max-width: 860px; margin: 0 auto; padding: 16px; }
+
+/* ===== ヘッダー ===== */
+header {
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  position: sticky; top: 0; z-index: 10;
+}
+header .wrap { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 12px 16px; }
+header h1 { font-size: 1.05rem; margin: 0; flex: 1; min-width: 180px; }
+nav { display: flex; gap: 6px; }
+
+/* ===== 部品 ===== */
+button {
+  font: inherit;
+  padding: 9px 16px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--surface-alt);
+  color: var(--text);
+  cursor: pointer;
+  min-height: 42px;
+}
+button:hover:not(:disabled) { border-color: var(--accent); }
+button:disabled { opacity: .45; cursor: not-allowed; }
+button.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+button.danger { color: var(--wrong); border-color: var(--wrong); background: transparent; }
+nav button { padding: 7px 12px; min-height: 36px; }
+nav button[aria-current="true"] { background: var(--accent-weak); border-color: var(--accent); color: var(--accent); }
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px;
+  margin-bottom: 16px;
+}
+.card h2 { margin: 0 0 12px; font-size: 1rem; }
+.card h3 { margin: 20px 0 8px; font-size: .92rem; color: var(--text-muted); }
+.card h3:first-child { margin-top: 0; }
+
+.muted { color: var(--text-muted); font-size: .87rem; }
+.row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+.hidden { display: none !important; }
+
+/* ===== 選択系 ===== */
+.opt {
+  display: flex; align-items: flex-start; gap: 10px;
+  padding: 11px 13px; margin-bottom: 8px;
+  border: 1px solid var(--border); border-radius: var(--radius);
+  background: var(--surface); cursor: pointer;
+}
+.opt:hover { border-color: var(--accent); }
+.opt input { margin-top: 5px; flex-shrink: 0; width: 18px; height: 18px; }
+.opt .key {
+  flex-shrink: 0; width: 22px; height: 22px; margin-top: 2px;
+  border-radius: 5px; background: var(--surface-alt); color: var(--text-muted);
+  font-size: .75rem; display: flex; align-items: center; justify-content: center;
+}
+.opt.is-correct { background: var(--correct-weak); border-color: var(--correct); }
+.opt.is-wrong { background: var(--wrong-weak); border-color: var(--wrong); }
+.opt.locked { cursor: default; }
+.opt.locked:hover { border-color: var(--border); }
+.opt.locked.is-correct:hover { border-color: var(--correct); }
+.opt.locked.is-wrong:hover { border-color: var(--wrong); }
+
+fieldset { border: none; padding: 0; margin: 0 0 16px; }
+legend { padding: 0; font-size: .92rem; color: var(--text-muted); margin-bottom: 8px; }
+.checks { display: flex; flex-direction: column; gap: 6px; }
+.checks label { display: flex; align-items: center; gap: 9px; padding: 7px 10px; border-radius: 8px; cursor: pointer; }
+.checks label:hover { background: var(--surface-alt); }
+.checks input { width: 17px; height: 17px; flex-shrink: 0; }
+.checks .count { margin-left: auto; color: var(--text-muted); font-size: .82rem; }
+.seg { display: flex; flex-wrap: wrap; gap: 6px; }
+.seg label {
+  padding: 7px 14px; border: 1px solid var(--border); border-radius: var(--radius);
+  cursor: pointer; font-size: .9rem;
+}
+.seg label:has(input:checked) { background: var(--accent-weak); border-color: var(--accent); color: var(--accent); font-weight: 600; }
+/* ラジオ本体は視覚的に隠すが、キーボード操作は残す */
+.seg input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+.seg label:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* ===== 出題画面 ===== */
+.qhead { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
+.badge {
+  display: inline-block; padding: 3px 9px; border-radius: 999px;
+  background: var(--surface-alt); color: var(--text-muted); font-size: .78rem; white-space: nowrap;
+}
+.badge.ok { background: var(--correct-weak); color: var(--correct); font-weight: 600; }
+.badge.ng { background: var(--wrong-weak); color: var(--wrong); font-weight: 600; }
+.qtext { font-size: 1.05rem; margin: 0 0 16px; white-space: pre-wrap; }
+.progress { height: 5px; background: var(--surface-alt); border-radius: 999px; overflow: hidden; margin-bottom: 14px; }
+.progress > div { height: 100%; background: var(--accent); transition: width .25s; }
+
+.explain {
+  margin-top: 16px; padding: 14px;
+  background: var(--surface-alt); border-radius: var(--radius);
+  border-left: 3px solid var(--accent);
+}
+.explain p { margin: 0 0 8px; white-space: pre-wrap; }
+.explain a { color: var(--accent); word-break: break-all; }
+
+/* ===== テーブル ===== */
+.scroll-x { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: .88rem; }
+th, td { padding: 8px 10px; text-align: left; border-bottom: 1px solid var(--border); white-space: nowrap; }
+th { color: var(--text-muted); font-weight: 600; }
+td.num, th.num { text-align: right; }
+.bar { display: inline-block; height: 7px; border-radius: 999px; background: var(--accent); vertical-align: middle; min-width: 2px; }
+
+/* ===== 通知 ===== */
+.notice { padding: 11px 14px; border-radius: var(--radius); margin-bottom: 14px; font-size: .89rem; }
+.notice.warn { background: var(--wrong-weak); color: var(--wrong); border: 1px solid var(--wrong); }
+.notice.info { background: var(--accent-weak); color: var(--accent); border: 1px solid var(--accent); }
+
+/* ===== 結果画面 ===== */
+.score { font-size: 2.4rem; font-weight: 700; line-height: 1.2; }
+details { border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 13px; margin-bottom: 8px; }
+summary { cursor: pointer; font-size: .93rem; }
+
+@media (max-width: 600px) {
+  .wrap { padding: 12px; }
+  .qtext { font-size: 1rem; }
+  .row > button { flex: 1 1 auto; }
+}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap">
+    <h1>SnowPro Core 演習ツール</h1>
+    <nav>
+      <button type="button" data-nav="home" aria-current="true">出題設定</button>
+      <button type="button" data-nav="history">履歴・データ</button>
+    </nav>
+  </div>
+</header>
+
+<main class="wrap">
+  <div id="notices"></div>
+
+  <!-- ========== 1. ホーム（出題設定） ========== -->
+  <section id="screen-home">
+    <div class="card">
+      <h2>出題設定</h2>
+      <fieldset>
+        <legend>出題分野</legend>
+        <div class="checks" id="domain-checks"></div>
+        <div class="row" style="margin-top:8px">
+          <button type="button" id="btn-domain-all">すべて選択</button>
+          <button type="button" id="btn-domain-none">すべて解除</button>
+        </div>
+      </fieldset>
+
+      <fieldset>
+        <legend>出題モード</legend>
+        <div class="seg" id="mode-seg">
+          <label><input type="radio" name="mode" value="normal" checked>通常（対象分野の全問）</label>
+          <label><input type="radio" name="mode" value="wrong">誤答のみ</label>
+          <label><input type="radio" name="mode" value="unseen">未回答のみ</label>
+        </div>
+        <p class="muted" id="mode-desc" style="margin:8px 0 0"></p>
+      </fieldset>
+
+      <fieldset>
+        <legend>出題数</legend>
+        <div class="seg">
+          <label><input type="radio" name="count" value="10" checked>10問</label>
+          <label><input type="radio" name="count" value="20">20問</label>
+          <label><input type="radio" name="count" value="50">50問</label>
+          <label><input type="radio" name="count" value="all">全問</label>
+        </div>
+      </fieldset>
+
+      <fieldset>
+        <legend>出題順</legend>
+        <div class="seg">
+          <label><input type="radio" name="order" value="random" checked>ランダム</label>
+          <label><input type="radio" name="order" value="seq">登録順</label>
+        </div>
+      </fieldset>
+
+      <p class="muted" id="start-info"></p>
+      <button type="button" class="primary" id="btn-start">演習を開始</button>
+    </div>
+
+    <div class="card">
+      <h2>分野別の成績</h2>
+      <div class="scroll-x"><table id="domain-stats"></table></div>
+    </div>
+  </section>
+
+  <!-- ========== 2. 出題画面 ========== -->
+  <section id="screen-quiz" class="hidden">
+    <div class="card">
+      <div class="progress"><div id="progress-bar"></div></div>
+      <div class="qhead">
+        <span class="badge" id="q-progress"></span>
+        <span class="badge" id="q-domain"></span>
+        <span class="badge" id="q-type"></span>
+        <span class="badge hidden" id="q-verdict"></span>
+      </div>
+      <p class="qtext" id="q-text"></p>
+      <div id="q-options"></div>
+      <div class="explain hidden" id="q-explain"></div>
+      <div class="row" style="margin-top:16px">
+        <button type="button" class="primary" id="btn-answer">解答する</button>
+        <button type="button" class="primary hidden" id="btn-next">次の問題へ</button>
+        <button type="button" id="btn-abort">中断してホームへ</button>
+      </div>
+      <p class="muted" style="margin:12px 0 0">キーボード: <b>1</b>〜<b>9</b> で選択肢、<b>Enter</b> で解答／次へ</p>
+    </div>
+  </section>
+
+  <!-- ========== 3. 結果画面 ========== -->
+  <section id="screen-result" class="hidden">
+    <div class="card">
+      <h2>演習結果</h2>
+      <p class="score" id="result-score"></p>
+      <p class="muted" id="result-meta"></p>
+      <div class="row" style="margin-top:16px">
+        <button type="button" class="primary" id="btn-retry-wrong">間違えた問題だけ再挑戦</button>
+        <button type="button" id="btn-result-home">ホームへ戻る</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>分野別の内訳</h2>
+      <div class="scroll-x"><table id="result-domains"></table></div>
+    </div>
+
+    <div class="card" id="result-wrong-card">
+      <h2>間違えた問題</h2>
+      <div id="result-wrong-list"></div>
+    </div>
+  </section>
+
+  <!-- ========== 4. 履歴・データ管理 ========== -->
+  <section id="screen-history" class="hidden">
+    <div class="card">
+      <h2>データ管理</h2>
+      <p class="muted">解答履歴とインポートした問題はブラウザの localStorage に保存されます。端末やブラウザを変える場合はエクスポートして持ち運んでください。</p>
+      <div class="row">
+        <button type="button" id="btn-export">JSONをエクスポート</button>
+        <button type="button" id="btn-import">JSONをインポート</button>
+        <input type="file" id="file-import" accept=".json,application/json" class="hidden">
+      </div>
+      <div class="row" style="margin-top:10px">
+        <button type="button" class="danger" id="btn-reset-history">解答履歴のみ削除</button>
+        <button type="button" class="danger" id="btn-reset-all">すべて削除</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>問題ごとの成績</h2>
+      <p class="muted" id="history-empty"></p>
+      <div class="scroll-x"><table id="history-table"></table></div>
+    </div>
+
+    <div class="card">
+      <h2>過去の演習セッション</h2>
+      <div class="scroll-x"><table id="session-table"></table></div>
+    </div>
+  </section>
+</main>
+
+<!-- ============================================================
+     問題データ（同梱バンク）
+     ここを直接編集して問題を追加できます。スキーマは README.md を参照。
+     ※ 以下はツールの動作確認用サンプルです。削除して構いません。
+     ============================================================ -->
+<script type="application/json" id="question-bank">
+[
+  {
+    "id": "sample-001",
+    "domain": 1,
+    "subtopic": "1.1",
+    "type": "single",
+    "question": "Snowflakeの3層アーキテクチャにおいて、データベースストレージ層の説明として正しいものはどれですか。",
+    "choices": [
+      "共有ディスク型アーキテクチャを採用し、すべてのコンピュートノードが中央のデータリポジトリにアクセスできる",
+      "シェアードナッシング型アーキテクチャを採用し、各ノードが自身のディスクにデータを保持する",
+      "各仮想ウェアハウスが専用のストレージ領域を持ち、ウェアハウス間でデータは共有されない",
+      "ユーザーリクエストの認証とアクセス制御を担当する"
+    ],
+    "answer": [0],
+    "explanation": "Snowflakeのストレージ層は共有ディスク型で、すべてのコンピュートノードが中央データリポジトリにアクセスできます。一方、コンピュート層はMPP（大規模並列処理）でシェアードナッシング型の特性を持つため、両者を組み合わせた「ハイブリッド」アーキテクチャと呼ばれます。認証・アクセス制御はクラウドサービス層の担当です。",
+    "source": "https://docs.snowflake.com/ja/user-guide/intro-key-concepts",
+    "tags": ["アーキテクチャ"]
+  },
+  {
+    "id": "sample-002",
+    "domain": 1,
+    "subtopic": "1.3",
+    "type": "multiple",
+    "question": "Snowflakeのマイクロパーティションに関する説明として正しいものを2つ選んでください。",
+    "choices": [
+      "非圧縮で50MB〜500MBのデータが格納され、圧縮して保存される",
+      "データのロード順に沿って自動的に作成される",
+      "ユーザーがサイズや境界を明示的に指定して作成する",
+      "列指向ではなく行指向で格納される"
+    ],
+    "answer": [0, 1],
+    "explanation": "マイクロパーティションは非圧縮で50MB〜500MBのデータを保持し、実際にはSnowflakeが圧縮して格納します。テーブルへのデータ投入順に自動的に作成され、ユーザーが明示的に管理する必要はありません。また、内部的には列指向（カラムナ）で格納されるため、クエリで参照しない列をスキップできます。",
+    "source": "https://docs.snowflake.com/ja/user-guide/tables-clustering-micropartitions",
+    "tags": ["マイクロパーティション"]
+  },
+  {
+    "id": "sample-003",
+    "domain": 1,
+    "subtopic": "1.6",
+    "type": "single",
+    "question": "現在から5分前の時点のテーブル内容を参照するクエリとして正しいものはどれですか。",
+    "choices": [
+      "SELECT * FROM my_table AT(OFFSET => -300);",
+      "SELECT * FROM my_table AT(OFFSET => 300);",
+      "SELECT * FROM my_table AT(TIMESTAMP => -300);",
+      "SELECT * FROM my_table BEFORE(OFFSET => '5 minutes');"
+    ],
+    "answer": [0],
+    "explanation": "Time TravelのOFFSETパラメータは「現在時刻からの相対秒数」を指定し、過去を参照するため負の値を使います。5分前は -60*5 = -300 秒です。TIMESTAMPパラメータを使う場合は具体的なタイムスタンプ値を渡します。",
+    "source": "https://docs.snowflake.com/ja/user-guide/data-time-travel",
+    "tags": ["Time Travel"]
+  },
+  {
+    "id": "sample-004",
+    "domain": 4,
+    "subtopic": "4.2",
+    "type": "single",
+    "question": "クラスタリングキーの設定を検討すべきケースとして最も適切なものはどれですか。",
+    "choices": [
+      "数TB規模の大きなテーブルで、特定の列による絞り込みクエリのパフォーマンスが低下している",
+      "数千行の小さなテーブルで、全件スキャンのクエリを頻繁に実行している",
+      "1日に何度も全行が洗い替えされる一時的なテーブルがある",
+      "テーブルのストレージコストを削減したい"
+    ],
+    "answer": [0],
+    "explanation": "クラスタリングキーは、自動クラスタリングによる継続的な再編成コストが発生するため、十分に大きなテーブル（一般に数TB規模）で、特定列によるフィルタやJOINが頻繁に行われ、かつ更新頻度が高すぎない場合に有効です。小さなテーブルや高頻度で書き換わるテーブルではコストに見合いません。ストレージ削減が目的の機能でもありません。",
+    "source": "https://docs.snowflake.com/ja/user-guide/tables-clustering-keys",
+    "tags": ["クラスタリング"]
+  },
+  {
+    "id": "sample-005",
+    "domain": 1,
+    "subtopic": "1.2",
+    "type": "single",
+    "question": "仮想ウェアハウスに関する説明として正しいものはどれですか。",
+    "choices": [
+      "各ウェアハウスは独立したコンピュートクラスタであり、他のウェアハウスとリソースを共有しない",
+      "すべてのウェアハウスが同一のコンピュートリソースを共有し、負荷に応じて分配される",
+      "ウェアハウスを停止するとテーブルのデータも削除される",
+      "1つのアカウントで作成できるウェアハウスは1つだけである"
+    ],
+    "answer": [0],
+    "explanation": "仮想ウェアハウスは独立したコンピュートクラスタで、他のウェアハウスとリソースを共有しません。そのため、あるウェアハウスの負荷が他のウェアハウスのパフォーマンスに影響しません。ウェアハウスはコンピュート層に属し、ストレージ層のデータとは分離しているため、停止してもデータは失われません。",
+    "source": "https://docs.snowflake.com/ja/user-guide/warehouses-overview",
+    "tags": ["仮想ウェアハウス"]
+  }
+]
+</script>
+
+<script>
+"use strict";
+
+/* ============================================================
+   定数
+   ============================================================ */
+const STORAGE_KEY = "snowpro-quiz-v1";
+const STORE_VERSION = 1;
+
+// 出題分野（CLAUDE.md の配点表に対応）
+const DOMAINS = {
+  1: { name: "Snowflake AIデータクラウドの機能とアーキテクチャ", weight: 31 },
+  2: { name: "アカウント管理およびデータガバナンス", weight: 20 },
+  3: { name: "データのロード、アンロード、および接続", weight: 18 },
+  4: { name: "パフォーマンス最適化、クエリ、および変換", weight: 21 },
+  5: { name: "データコラボレーション", weight: 10 },
+};
+const DOMAIN_IDS = Object.keys(DOMAINS).map(Number);
+
+/* ============================================================
+   グローバル状態
+   ============================================================ */
+let store = null;    // localStorage に永続化するデータ
+let bank = [];       // 同梱バンク + インポート問題をマージした問題配列
+let session = null;  // 演習中のセッション（未演習時は null）
+
+/* ============================================================
+   ユーティリティ
+   ============================================================ */
+const $ = (sel) => document.querySelector(sel);
+
+/** 要素を生成する。text は textContent として設定（HTMLは解釈しない） */
+function el(tag, opts = {}) {
+  const node = document.createElement(tag);
+  if (opts.className) node.className = opts.className;
+  if (opts.text !== undefined) node.textContent = String(opts.text);
+  if (opts.attrs) for (const [k, v] of Object.entries(opts.attrs)) node.setAttribute(k, v);
+  if (opts.children) for (const c of opts.children) node.appendChild(c);
+  return node;
+}
+
+/** 子要素をすべて削除する */
+function clear(node) {
+  while (node.firstChild) node.removeChild(node.firstChild);
+}
+
+/** 配列をシャッフルする（Fisher-Yates） */
+function shuffle(arr) {
+  const a = arr.slice();
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
+/** 2つの数値配列が集合として等しいか */
+function sameSet(a, b) {
+  if (a.length !== b.length) return false;
+  const s = new Set(a);
+  return b.every((v) => s.has(v));
+}
+
+/** ISO文字列を YYYY-MM-DD HH:mm 形式に整形する */
+function fmtDate(iso) {
+  if (!iso) return "-";
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return "-";
+  const p = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
+/** 秒数を「M分S秒」形式に整形する */
+function fmtDuration(ms) {
+  const sec = Math.max(0, Math.round(ms / 1000));
+  const m = Math.floor(sec / 60);
+  const s = sec % 60;
+  return m > 0 ? `${m}分${s}秒` : `${s}秒`;
+}
+
+/** 画面上部に通知を表示する */
+function notify(message, kind = "info") {
+  const box = $("#notices");
+  const div = el("div", { className: `notice ${kind}`, text: message });
+  box.appendChild(div);
+  // info は一定時間で自動的に消す。warn は残して気づけるようにする
+  if (kind === "info") setTimeout(() => div.remove(), 6000);
+}
+
+/* ============================================================
+   問題データの検証とロード
+   ============================================================ */
+
+/**
+ * 問題1件を検証する。問題なければ空配列、不正なら理由の配列を返す。
+ * インポートJSONは外部入力なので、ここで型を厳密に確認する。
+ */
+function validateQuestion(q, where) {
+  const errs = [];
+  const label = (q && q.id) ? `${where}（id: ${q.id}）` : where;
+  if (!q || typeof q !== "object" || Array.isArray(q)) return [`${where}: オブジェクトではありません`];
+  if (typeof q.id !== "string" || !q.id.trim()) errs.push(`${label}: id が文字列ではありません`);
+  if (!DOMAIN_IDS.includes(Number(q.domain))) errs.push(`${label}: domain は 1〜5 の数値である必要があります`);
+  if (q.type !== "single" && q.type !== "multiple") errs.push(`${label}: type は "single" か "multiple" です`);
+  if (typeof q.question !== "string" || !q.question.trim()) errs.push(`${label}: question が空です`);
+  if (!Array.isArray(q.choices) || q.choices.length < 2) errs.push(`${label}: choices は2件以上の配列が必要です`);
+  else if (!q.choices.every((c) => typeof c === "string")) errs.push(`${label}: choices の要素は文字列である必要があります`);
+  if (!Array.isArray(q.answer) || q.answer.length === 0) errs.push(`${label}: answer は1件以上の配列が必要です`);
+  else if (Array.isArray(q.choices)) {
+    const bad = q.answer.some((i) => !Number.isInteger(i) || i < 0 || i >= q.choices.length);
+    if (bad) errs.push(`${label}: answer に choices の範囲外のインデックスがあります`);
+    if (q.type === "single" && q.answer.length !== 1) errs.push(`${label}: type が single の場合 answer は1件です`);
+  }
+  return errs;
+}
+
+/** 問題配列を検証し、正しいものだけ返す。エラーは通知する */
+function sanitizeQuestions(list, where) {
+  const ok = [];
+  const errs = [];
+  list.forEach((q, i) => {
+    const e = validateQuestion(q, `${where} ${i + 1}件目`);
+    if (e.length) errs.push(...e);
+    else ok.push(q);
+  });
+  if (errs.length) {
+    notify(`${where}に不正な問題が ${errs.length} 件ありました（読み飛ばします）: ${errs.slice(0, 3).join(" / ")}`, "warn");
+  }
+  return ok;
+}
+
+/** HTML内の同梱バンクを読み込む */
+function loadEmbeddedBank() {
+  const node = document.getElementById("question-bank");
+  if (!node) return [];
+  const raw = node.textContent.trim();
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) {
+      notify("同梱の問題データが配列ではありません。", "warn");
+      return [];
+    }
+    return sanitizeQuestions(parsed, "同梱の問題データ");
+  } catch (e) {
+    notify(`同梱の問題データを解析できませんでした: ${e.message}`, "warn");
+    return [];
+  }
+}
+
+/**
+ * 問題バンクを再構築する。
+ * 同梱バンク + customQuestions を id でマージし、同一 id は customQuestions を優先する
+ * （自分で追加・修正した問題が同梱分を上書きできる）。
+ */
+function rebuildBank() {
+  const embedded = loadEmbeddedBank();
+  const byId = new Map();
+  for (const q of embedded) byId.set(q.id, q);
+
+  const dupes = [];
+  for (const q of store.customQuestions) {
+    if (byId.has(q.id)) dupes.push(q.id);
+    byId.set(q.id, q);
+  }
+  if (dupes.length) {
+    notify(`インポート済みの問題が同梱バンクと重複する id を上書きしました: ${dupes.slice(0, 5).join(", ")}`, "info");
+  }
+  bank = Array.from(byId.values());
+}
+
+/* ============================================================
+   永続化（localStorage）
+   ============================================================ */
+
+function emptyStore() {
+  return { version: STORE_VERSION, history: {}, sessions: [], customQuestions: [] };
+}
+
+/** localStorage から読み込む。壊れていれば初期状態にフォールバックし、黙って消さずに通知する */
+function loadStore() {
+  let raw;
+  try {
+    raw = localStorage.getItem(STORAGE_KEY);
+  } catch (e) {
+    notify("このブラウザでは localStorage が使用できないため、履歴は保存されません。", "warn");
+    return emptyStore();
+  }
+  if (!raw) return emptyStore();
+
+  try {
+    const data = JSON.parse(raw);
+    if (!data || typeof data !== "object") throw new Error("形式が不正です");
+    return normalizeStore(data);
+  } catch (e) {
+    notify(`保存データを読み込めませんでした（${e.message}）。履歴は初期化されますが、上書き保存されるまで元のデータはブラウザに残っています。`, "warn");
+    return emptyStore();
+  }
+}
+
+/** 読み込んだデータの型を整える */
+function normalizeStore(data) {
+  const s = emptyStore();
+  if (data.history && typeof data.history === "object" && !Array.isArray(data.history)) {
+    for (const [id, h] of Object.entries(data.history)) {
+      if (!h || typeof h !== "object") continue;
+      s.history[id] = {
+        correct: Number(h.correct) || 0,
+        wrong: Number(h.wrong) || 0,
+        lastAnsweredAt: typeof h.lastAnsweredAt === "string" ? h.lastAnsweredAt : null,
+        lastResult: h.lastResult === "correct" || h.lastResult === "wrong" ? h.lastResult : null,
+      };
+    }
+  }
+  if (Array.isArray(data.sessions)) {
+    s.sessions = data.sessions.filter((x) => x && typeof x === "object").slice(-200);
+  }
+  if (Array.isArray(data.customQuestions)) {
+    s.customQuestions = sanitizeQuestions(data.customQuestions, "保存済みの問題データ");
+  }
+  return s;
+}
+
+function saveStore() {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(store));
+  } catch (e) {
+    notify(`保存に失敗しました: ${e.message}`, "warn");
+  }
+}
+
+/* ============================================================
+   成績の集計
+   ============================================================ */
+
+/** 問題の履歴を取得する（未回答なら null） */
+function hist(id) {
+  return store.history[id] || null;
+}
+
+/** 過去に一度でも誤答した問題か */
+function isWrongQuestion(q) {
+  const h = hist(q.id);
+  return !!h && h.wrong > 0;
+}
+
+/** 一度も解答していない問題か */
+function isUnseenQuestion(q) {
+  const h = hist(q.id);
+  return !h || (h.correct + h.wrong) === 0;
+}
+
+/** 現在の設定に合致する問題を抽出する */
+function filterQuestions(domains, mode) {
+  return bank.filter((q) => {
+    if (!domains.includes(Number(q.domain))) return false;
+    if (mode === "wrong") return isWrongQuestion(q);
+    if (mode === "unseen") return isUnseenQuestion(q);
+    return true;
+  });
+}
+
+/** 分野ごとの集計を返す */
+function domainStats() {
+  return DOMAIN_IDS.map((d) => {
+    const qs = bank.filter((q) => Number(q.domain) === d);
+    let correct = 0, wrong = 0, answered = 0;
+    for (const q of qs) {
+      const h = hist(q.id);
+      if (h && (h.correct + h.wrong) > 0) {
+        answered++;
+        correct += h.correct;
+        wrong += h.wrong;
+      }
+    }
+    const total = correct + wrong;
+    return {
+      domain: d,
+      questions: qs.length,
+      answered,
+      correct,
+      wrong,
+      rate: total > 0 ? Math.round((correct / total) * 100) : null,
+    };
+  });
+}
+
+/* ============================================================
+   画面切り替え
+   ============================================================ */
+
+function showScreen(name) {
+  for (const s of ["home", "quiz", "result", "history"]) {
+    $(`#screen-${s}`).classList.toggle("hidden", s !== name);
+  }
+  // ナビの現在地表示。演習中・結果表示中はどちらも非選択にする
+  for (const btn of document.querySelectorAll("nav button")) {
+    btn.setAttribute("aria-current", String(btn.dataset.nav === name));
+  }
+  window.scrollTo(0, 0);
+}
+
+/* ============================================================
+   ホーム画面
+   ============================================================ */
+
+/** 選択中の分野IDを取得する */
+function selectedDomains() {
+  return Array.from(document.querySelectorAll("#domain-checks input:checked")).map((i) => Number(i.value));
+}
+
+function selectedRadio(name) {
+  const node = document.querySelector(`input[name="${name}"]:checked`);
+  return node ? node.value : null;
+}
+
+/** 分野チェックボックスを構築する */
+function buildDomainChecks() {
+  const box = $("#domain-checks");
+  clear(box);
+  for (const d of DOMAIN_IDS) {
+    const input = el("input", { attrs: { type: "checkbox", value: String(d), checked: "checked" } });
+    input.addEventListener("change", renderHome);
+    const label = el("label", {
+      children: [
+        input,
+        el("span", { text: `${d}. ${DOMAINS[d].name}（${DOMAINS[d].weight}%）` }),
+        el("span", { className: "count", attrs: { "data-domain-count": String(d) } }),
+      ],
+    });
+    box.appendChild(label);
+  }
+}
+
+/** ホーム画面を描画する */
+function renderHome() {
+  const domains = selectedDomains();
+  const mode = selectedRadio("mode");
+
+  // 分野ごとの問題数をチェックボックス右端に表示
+  for (const d of DOMAIN_IDS) {
+    const span = document.querySelector(`[data-domain-count="${d}"]`);
+    if (span) span.textContent = `${bank.filter((q) => Number(q.domain) === d).length}問`;
+  }
+
+  // モードの説明文
+  const descs = {
+    normal: "選択した分野に登録されている問題すべてから出題します。",
+    wrong: "過去に1回でも誤答した問題だけを出題します。復習用のモードです。",
+    unseen: "まだ一度も解答していない問題だけを出題します。",
+  };
+  $("#mode-desc").textContent = descs[mode] || "";
+
+  // 開始ボタンの状態
+  const pool = filterQuestions(domains, mode);
+  const info = $("#start-info");
+  const btn = $("#btn-start");
+  if (bank.length === 0) {
+    info.textContent = "問題が1件も登録されていません。README.md を参照して問題を追加してください。";
+    btn.disabled = true;
+  } else if (domains.length === 0) {
+    info.textContent = "出題分野を1つ以上選択してください。";
+    btn.disabled = true;
+  } else if (pool.length === 0) {
+    info.textContent = "条件に一致する問題がありません。分野または出題モードを変更してください。";
+    btn.disabled = true;
+  } else {
+    info.textContent = `条件に一致する問題: ${pool.length}問`;
+    btn.disabled = false;
+  }
+
+  renderDomainStats();
+}
+
+/** 分野別成績テーブルを描画する */
+function renderDomainStats() {
+  const table = $("#domain-stats");
+  clear(table);
+  const head = el("tr", {
+    children: [
+      el("th", { text: "分野" }),
+      el("th", { className: "num", text: "問題数" }),
+      el("th", { className: "num", text: "解答済" }),
+      el("th", { className: "num", text: "正答率" }),
+      el("th", { text: "" }),
+    ],
+  });
+  table.appendChild(el("thead", { children: [head] }));
+
+  const body = el("tbody");
+  for (const s of domainStats()) {
+    const bar = el("span", { className: "bar" });
+    bar.style.width = `${s.rate === null ? 0 : s.rate}px`;
+    body.appendChild(el("tr", {
+      children: [
+        el("td", { text: `${s.domain}. ${DOMAINS[s.domain].name}` }),
+        el("td", { className: "num", text: s.questions }),
+        el("td", { className: "num", text: `${s.answered}/${s.questions}` }),
+        el("td", { className: "num", text: s.rate === null ? "-" : `${s.rate}%` }),
+        el("td", { children: [bar] }),
+      ],
+    }));
+  }
+  table.appendChild(body);
+}
+
+/* ============================================================
+   演習セッション
+   ============================================================ */
+
+/**
+ * 演習を開始する。
+ * questions を直接渡した場合はその問題群で開始する（誤答再挑戦で使用）。
+ */
+function startSession(opts) {
+  const { domains, mode, count, order, questions } = opts;
+
+  let pool = questions || filterQuestions(domains, mode);
+  if (pool.length === 0) {
+    notify("出題できる問題がありません。", "warn");
+    return;
+  }
+
+  pool = order === "seq" ? pool.slice() : shuffle(pool);
+  const limit = count === "all" ? pool.length : Math.min(Number(count), pool.length);
+
+  session = {
+    questions: pool.slice(0, limit),
+    index: 0,
+    answers: [],
+    selected: new Set(),
+    answered: false,
+    startedAt: Date.now(),
+    domains,
+    mode,
+  };
+  showScreen("quiz");
+  renderQuestion();
+}
+
+/** 現在の問題を描画する */
+function renderQuestion() {
+  const q = session.questions[session.index];
+  const total = session.questions.length;
+
+  $("#progress-bar").style.width = `${(session.index / total) * 100}%`;
+  $("#q-progress").textContent = `${session.index + 1} / ${total}`;
+  $("#q-domain").textContent = `分野${q.domain}${q.subtopic ? ` (${q.subtopic})` : ""}`;
+  $("#q-type").textContent = q.type === "multiple" ? `複数選択（${q.answer.length}個）` : "単一選択";
+  $("#q-verdict").classList.add("hidden");
+  $("#q-text").textContent = q.question;
+
+  // 選択肢
+  const box = $("#q-options");
+  clear(box);
+  q.choices.forEach((choice, i) => {
+    const input = el("input", {
+      attrs: {
+        type: q.type === "multiple" ? "checkbox" : "radio",
+        name: "choice",
+        value: String(i),
+      },
+    });
+    input.addEventListener("change", () => {
+      if (q.type === "multiple") {
+        if (input.checked) session.selected.add(i);
+        else session.selected.delete(i);
+      } else {
+        session.selected = new Set([i]);
+      }
+      $("#btn-answer").disabled = session.selected.size === 0;
+    });
+    const label = el("label", {
+      className: "opt",
+      attrs: { "data-choice": String(i) },
+      children: [
+        input,
+        el("span", { className: "key", text: String(i + 1) }),
+        el("span", { text: choice }),
+      ],
+    });
+    box.appendChild(label);
+  });
+
+  // 解説を隠し、ボタンを初期状態に戻す
+  $("#q-explain").classList.add("hidden");
+  clear($("#q-explain"));
+  $("#btn-answer").classList.remove("hidden");
+  $("#btn-answer").disabled = true;
+  $("#btn-next").classList.add("hidden");
+  $("#btn-next").textContent = session.index === total - 1 ? "結果を見る" : "次の問題へ";
+}
+
+/** 解答を採点し、結果と解説を表示する */
+function submitAnswer() {
+  if (session.answered || session.selected.size === 0) return;
+
+  const q = session.questions[session.index];
+  const selected = Array.from(session.selected).sort((a, b) => a - b);
+  const correct = sameSet(selected, q.answer);
+
+  session.answered = true;
+  session.answers.push({ id: q.id, domain: Number(q.domain), selected, correct });
+
+  // 履歴を更新して保存
+  const h = store.history[q.id] || { correct: 0, wrong: 0, lastAnsweredAt: null, lastResult: null };
+  if (correct) h.correct++; else h.wrong++;
+  h.lastAnsweredAt = new Date().toISOString();
+  h.lastResult = correct ? "correct" : "wrong";
+  store.history[q.id] = h;
+  saveStore();
+
+  // 正誤バッジ
+  const verdict = $("#q-verdict");
+  verdict.textContent = correct ? "正解" : "不正解";
+  verdict.className = `badge ${correct ? "ok" : "ng"}`;
+
+  // 選択肢に正誤の色を付け、これ以上変更できないようにする
+  for (const label of document.querySelectorAll("#q-options .opt")) {
+    const i = Number(label.dataset.choice);
+    const input = label.querySelector("input");
+    input.disabled = true;
+    label.classList.add("locked");
+    if (q.answer.includes(i)) label.classList.add("is-correct");
+    else if (selected.includes(i)) label.classList.add("is-wrong");
+  }
+
+  // 解説
+  const box = $("#q-explain");
+  clear(box);
+  box.appendChild(el("p", { text: q.explanation || "（解説は登録されていません）" }));
+  if (q.source) {
+    const a = el("a", { text: q.source, attrs: { href: q.source, target: "_blank", rel: "noopener noreferrer" } });
+    box.appendChild(el("p", { className: "muted", children: [el("span", { text: "出典: " }), a] }));
+  }
+  if (Array.isArray(q.tags) && q.tags.length) {
+    box.appendChild(el("p", { className: "muted", text: `タグ: ${q.tags.join(", ")}` }));
+  }
+  box.classList.remove("hidden");
+
+  $("#btn-answer").classList.add("hidden");
+  $("#btn-next").classList.remove("hidden");
+  $("#btn-next").focus();
+}
+
+/** 次の問題へ進む。最終問なら結果画面へ */
+function nextQuestion() {
+  if (!session.answered) return;
+  if (session.index === session.questions.length - 1) {
+    finishSession();
+    return;
+  }
+  session.index++;
+  session.selected = new Set();
+  session.answered = false;
+  renderQuestion();
+}
+
+/** セッションを終了し、結果画面を描画する */
+function finishSession() {
+  const finishedAt = Date.now();
+  const correct = session.answers.filter((a) => a.correct).length;
+
+  store.sessions.push({
+    startedAt: new Date(session.startedAt).toISOString(),
+    finishedAt: new Date(finishedAt).toISOString(),
+    domains: session.domains,
+    mode: session.mode,
+    total: session.answers.length,
+    correct,
+  });
+  if (store.sessions.length > 200) store.sessions = store.sessions.slice(-200);
+  saveStore();
+
+  renderResult(finishedAt - session.startedAt);
+  showScreen("result");
+}
+
+/* ============================================================
+   結果画面
+   ============================================================ */
+
+function renderResult(elapsedMs) {
+  const total = session.answers.length;
+  const correct = session.answers.filter((a) => a.correct).length;
+  const rate = total > 0 ? Math.round((correct / total) * 100) : 0;
+
+  $("#result-score").textContent = `${correct} / ${total}　（${rate}%）`;
+  $("#result-meta").textContent = `所要時間: ${fmtDuration(elapsedMs)}`;
+
+  // 分野別内訳（今回のセッション分のみ）
+  const table = $("#result-domains");
+  clear(table);
+  table.appendChild(el("thead", {
+    children: [el("tr", {
+      children: [
+        el("th", { text: "分野" }),
+        el("th", { className: "num", text: "出題" }),
+        el("th", { className: "num", text: "正解" }),
+        el("th", { className: "num", text: "正答率" }),
+      ],
+    })],
+  }));
+  const body = el("tbody");
+  for (const d of DOMAIN_IDS) {
+    const items = session.answers.filter((a) => a.domain === d);
+    if (items.length === 0) continue;
+    const c = items.filter((a) => a.correct).length;
+    body.appendChild(el("tr", {
+      children: [
+        el("td", { text: `${d}. ${DOMAINS[d].name}` }),
+        el("td", { className: "num", text: items.length }),
+        el("td", { className: "num", text: c }),
+        el("td", { className: "num", text: `${Math.round((c / items.length) * 100)}%` }),
+      ],
+    }));
+  }
+  table.appendChild(body);
+
+  // 間違えた問題の一覧
+  const wrongIds = session.answers.filter((a) => !a.correct).map((a) => a.id);
+  const list = $("#result-wrong-list");
+  clear(list);
+  $("#btn-retry-wrong").disabled = wrongIds.length === 0;
+
+  if (wrongIds.length === 0) {
+    list.appendChild(el("p", { className: "muted", text: "全問正解です。間違えた問題はありません。" }));
+  } else {
+    for (const id of wrongIds) {
+      const q = session.questions.find((x) => x.id === id);
+      if (!q) continue;
+      const answered = session.answers.find((a) => a.id === id);
+      const detail = el("details");
+      detail.appendChild(el("summary", { text: `[分野${q.domain}] ${q.question}` }));
+      detail.appendChild(el("p", {
+        className: "muted",
+        text: `あなたの解答: ${answered.selected.map((i) => `${i + 1}. ${q.choices[i]}`).join(" / ")}`,
+      }));
+      detail.appendChild(el("p", {
+        text: `正解: ${q.answer.map((i) => `${i + 1}. ${q.choices[i]}`).join(" / ")}`,
+      }));
+      detail.appendChild(el("p", { className: "muted", text: q.explanation || "" }));
+      list.appendChild(detail);
+    }
+  }
+}
+
+/* ============================================================
+   履歴・データ管理画面
+   ============================================================ */
+
+function renderHistory() {
+  // --- 問題ごとの成績 ---
+  const table = $("#history-table");
+  clear(table);
+  const rows = bank
+    .map((q) => ({ q, h: hist(q.id) }))
+    .filter((r) => r.h && (r.h.correct + r.h.wrong) > 0);
+
+  $("#history-empty").textContent = rows.length === 0
+    ? "まだ解答履歴がありません。演習を1回行うとここに表示されます。"
+    : "";
+
+  if (rows.length > 0) {
+    // 正答率の低い順（＝苦手な問題が上）に並べる
+    rows.sort((a, b) => {
+      const ra = a.h.correct / (a.h.correct + a.h.wrong);
+      const rb = b.h.correct / (b.h.correct + b.h.wrong);
+      return ra - rb;
+    });
+
+    table.appendChild(el("thead", {
+      children: [el("tr", {
+        children: [
+          el("th", { text: "分野" }),
+          el("th", { text: "問題" }),
+          el("th", { className: "num", text: "正解" }),
+          el("th", { className: "num", text: "誤答" }),
+          el("th", { text: "直近" }),
+          el("th", { text: "最終解答日" }),
+        ],
+      })],
+    }));
+    const body = el("tbody");
+    for (const { q, h } of rows) {
+      const verdict = el("span", {
+        className: `badge ${h.lastResult === "correct" ? "ok" : "ng"}`,
+        text: h.lastResult === "correct" ? "正解" : "不正解",
+      });
+      // 問題文は長いので先頭のみ表示する
+      const short = q.question.length > 40 ? `${q.question.slice(0, 40)}…` : q.question;
+      const qCell = el("td", { text: short });
+      qCell.title = q.question;
+      qCell.style.whiteSpace = "normal";
+      qCell.style.minWidth = "260px";
+      body.appendChild(el("tr", {
+        children: [
+          el("td", { text: q.domain }),
+          qCell,
+          el("td", { className: "num", text: h.correct }),
+          el("td", { className: "num", text: h.wrong }),
+          el("td", { children: [verdict] }),
+          el("td", { text: fmtDate(h.lastAnsweredAt) }),
+        ],
+      }));
+    }
+    table.appendChild(body);
+  }
+
+  // --- 過去セッション ---
+  const st = $("#session-table");
+  clear(st);
+  if (store.sessions.length === 0) {
+    st.appendChild(el("tbody", {
+      children: [el("tr", { children: [el("td", { className: "muted", text: "まだ演習記録がありません。" })] })],
+    }));
+    return;
+  }
+  st.appendChild(el("thead", {
+    children: [el("tr", {
+      children: [
+        el("th", { text: "日時" }),
+        el("th", { text: "分野" }),
+        el("th", { text: "モード" }),
+        el("th", { className: "num", text: "成績" }),
+        el("th", { className: "num", text: "正答率" }),
+      ],
+    })],
+  }));
+  const sbody = el("tbody");
+  const modeLabels = { normal: "通常", wrong: "誤答のみ", unseen: "未回答のみ", retry: "誤答再挑戦" };
+  for (const s of store.sessions.slice().reverse()) {
+    const rate = s.total > 0 ? Math.round((s.correct / s.total) * 100) : 0;
+    sbody.appendChild(el("tr", {
+      children: [
+        el("td", { text: fmtDate(s.startedAt) }),
+        el("td", { text: Array.isArray(s.domains) ? s.domains.join(", ") : "-" }),
+        el("td", { text: modeLabels[s.mode] || s.mode || "-" }),
+        el("td", { className: "num", text: `${s.correct} / ${s.total}` }),
+        el("td", { className: "num", text: `${rate}%` }),
+      ],
+    }));
+  }
+  st.appendChild(sbody);
+}
+
+/* ============================================================
+   エクスポート / インポート
+   ============================================================ */
+
+function exportJson() {
+  const blob = new Blob([JSON.stringify(store, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = el("a", { attrs: { href: url, download: `snowpro-quiz-${new Date().toISOString().slice(0, 10)}.json` } });
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+  notify("エクスポートしました。", "info");
+}
+
+/**
+ * インポートされたJSONを取り込む。次の3形式を受け付ける。
+ *  1) 問題の配列                       → 問題として追加
+ *  2) { questions: [...] }             → 問題として追加
+ *  3) エクスポートしたバックアップ全体   → 履歴・セッション・問題を復元
+ */
+function importJson(text) {
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch (e) {
+    notify(`JSONを解析できませんでした: ${e.message}`, "warn");
+    return;
+  }
+
+  let questions = null;
+  let isBackup = false;
+
+  if (Array.isArray(data)) {
+    questions = data;
+  } else if (data && typeof data === "object") {
+    if (Array.isArray(data.questions)) questions = data.questions;
+    if (data.history || data.sessions || data.customQuestions) isBackup = true;
+  } else {
+    notify("対応していない形式のJSONです。", "warn");
+    return;
+  }
+
+  if (isBackup) {
+    if (!confirm("バックアップ形式のJSONです。現在の解答履歴を読み込んだ内容で置き換えます。よろしいですか？")) return;
+    store = normalizeStore(data);
+    saveStore();
+    rebuildBank();
+    renderHome();
+    renderHistory();
+    notify("バックアップから復元しました。", "info");
+    return;
+  }
+
+  if (!questions) {
+    notify("問題データが見つかりませんでした。配列または { \"questions\": [...] } 形式で指定してください。", "warn");
+    return;
+  }
+
+  const valid = sanitizeQuestions(questions, "インポートした問題データ");
+  if (valid.length === 0) {
+    notify("取り込める問題がありませんでした。", "warn");
+    return;
+  }
+
+  // id でマージする（同一 id は新しい内容で上書き）
+  const byId = new Map(store.customQuestions.map((q) => [q.id, q]));
+  let added = 0, updated = 0;
+  for (const q of valid) {
+    if (byId.has(q.id)) updated++; else added++;
+    byId.set(q.id, q);
+  }
+  store.customQuestions = Array.from(byId.values());
+  saveStore();
+  rebuildBank();
+  renderHome();
+  renderHistory();
+  notify(`問題を取り込みました（新規 ${added}件 / 更新 ${updated}件）。現在の登録数: ${bank.length}問`, "info");
+}
+
+/* ============================================================
+   イベント登録
+   ============================================================ */
+
+function bindEvents() {
+  // ナビゲーション
+  for (const btn of document.querySelectorAll("nav button")) {
+    btn.addEventListener("click", () => {
+      const target = btn.dataset.nav;
+      if (target === "history") renderHistory();
+      if (target === "home") renderHome();
+      showScreen(target);
+    });
+  }
+
+  // 分野の一括選択
+  $("#btn-domain-all").addEventListener("click", () => {
+    for (const i of document.querySelectorAll("#domain-checks input")) i.checked = true;
+    renderHome();
+  });
+  $("#btn-domain-none").addEventListener("click", () => {
+    for (const i of document.querySelectorAll("#domain-checks input")) i.checked = false;
+    renderHome();
+  });
+
+  // 設定変更で対象問題数を再計算
+  for (const name of ["mode", "count", "order"]) {
+    for (const i of document.querySelectorAll(`input[name="${name}"]`)) {
+      i.addEventListener("change", renderHome);
+    }
+  }
+
+  // 演習の開始・進行
+  $("#btn-start").addEventListener("click", () => {
+    startSession({
+      domains: selectedDomains(),
+      mode: selectedRadio("mode"),
+      count: selectedRadio("count"),
+      order: selectedRadio("order"),
+    });
+  });
+  $("#btn-answer").addEventListener("click", submitAnswer);
+  $("#btn-next").addEventListener("click", nextQuestion);
+  $("#btn-abort").addEventListener("click", () => {
+    if (!confirm("演習を中断してホームに戻ります。ここまでの解答は履歴に記録済みです。よろしいですか？")) return;
+    session = null;
+    renderHome();
+    showScreen("home");
+  });
+
+  // 結果画面
+  $("#btn-retry-wrong").addEventListener("click", () => {
+    const wrongIds = new Set(session.answers.filter((a) => !a.correct).map((a) => a.id));
+    const questions = session.questions.filter((q) => wrongIds.has(q.id));
+    startSession({ domains: session.domains, mode: "retry", count: "all", order: "seq", questions });
+  });
+  $("#btn-result-home").addEventListener("click", () => {
+    session = null;
+    renderHome();
+    showScreen("home");
+  });
+
+  // データ管理
+  $("#btn-export").addEventListener("click", exportJson);
+  $("#btn-import").addEventListener("click", () => $("#file-import").click());
+  $("#file-import").addEventListener("change", (ev) => {
+    const file = ev.target.files && ev.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => importJson(String(reader.result));
+    reader.onerror = () => notify("ファイルを読み込めませんでした。", "warn");
+    reader.readAsText(file);
+    ev.target.value = ""; // 同じファイルを続けて選べるようにリセット
+  });
+  $("#btn-reset-history").addEventListener("click", () => {
+    if (!confirm("解答履歴と演習記録をすべて削除します。インポートした問題は残ります。よろしいですか？")) return;
+    store.history = {};
+    store.sessions = [];
+    saveStore();
+    renderHome();
+    renderHistory();
+    notify("解答履歴を削除しました。", "info");
+  });
+  $("#btn-reset-all").addEventListener("click", () => {
+    if (!confirm("解答履歴・演習記録・インポートした問題をすべて削除します。この操作は取り消せません。よろしいですか？")) return;
+    store = emptyStore();
+    saveStore();
+    rebuildBank();
+    renderHome();
+    renderHistory();
+    notify("すべてのデータを削除しました。", "info");
+  });
+
+  // キーボードショートカット（出題画面でのみ有効）
+  document.addEventListener("keydown", (ev) => {
+    if ($("#screen-quiz").classList.contains("hidden")) return;
+    if (ev.target instanceof HTMLInputElement && ev.target.type === "text") return;
+
+    if (ev.key >= "1" && ev.key <= "9") {
+      if (session.answered) return;
+      const idx = Number(ev.key) - 1;
+      const label = document.querySelector(`#q-options .opt[data-choice="${idx}"]`);
+      if (!label) return;
+      ev.preventDefault();
+      const input = label.querySelector("input");
+      input.checked = input.type === "checkbox" ? !input.checked : true;
+      input.dispatchEvent(new Event("change"));
+    } else if (ev.key === "Enter") {
+      ev.preventDefault();
+      if (session.answered) nextQuestion();
+      else submitAnswer();
+    }
+  });
+}
+
+/* ============================================================
+   起動
+   ============================================================ */
+
+function init() {
+  store = loadStore();
+  rebuildBank();
+  buildDomainChecks();
+  bindEvents();
+  renderHome();
+  showScreen("home");
+}
+
+init();
+</script>
+</body>
+</html>
