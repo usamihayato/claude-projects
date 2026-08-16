@@ -107,8 +107,8 @@ nav button[aria-current="true"] { background: var(--accent-weak); border-color: 
   border-radius: 5px; background: var(--surface-alt); color: var(--text-muted);
   font-size: .75rem; display: flex; align-items: center; justify-content: center;
 }
-.opt.is-correct { background: var(--correct-weak); border-color: var(--correct); }
-.opt.is-wrong { background: var(--wrong-weak); border-color: var(--wrong); }
+.opt.is-correct { background: var(--correct-weak); border-color: var(--correct); color: var(--correct); font-weight: 500; }
+.opt.is-wrong { background: var(--wrong-weak); border-color: var(--wrong); color: var(--wrong); font-weight: 500; border-width: 2px; }
 .opt.locked { cursor: default; }
 .opt.locked:hover { border-color: var(--border); }
 .opt.locked.is-correct:hover { border-color: var(--correct); }
@@ -201,6 +201,21 @@ summary { cursor: pointer; font-size: .93rem; }
         <div class="row" style="margin-top:8px">
           <button type="button" id="btn-domain-all">すべて選択</button>
           <button type="button" id="btn-domain-none">すべて解除</button>
+        </div>
+      </fieldset>
+
+      <fieldset>
+        <legend>セット選択</legend>
+        <div style="margin-bottom:8px">
+          <label for="set-select">セット:</label>
+          <select id="set-select" style="padding:6px 8px; border:1px solid var(--border); border-radius:var(--radius); background:var(--surface); color:var(--text); font-size:0.9rem; cursor:pointer; min-width:200px">
+            <option value="">すべてのセット</option>
+            <option value="1">セット1 (q001-q100)</option>
+            <option value="2">セット2 (q101-q200)</option>
+            <option value="3">セット3 (q201-q300)</option>
+            <option value="4">セット4 (q301-q400)</option>
+            <option value="5">セット5 (q401-q500)</option>
+          </select>
         </div>
       </fieldset>
 
@@ -664,8 +679,9 @@ function isUnseenQuestion(q) {
 }
 
 /** 現在の設定に合致する問題を抽出する */
-function filterQuestions(domains, mode) {
+function filterQuestions(domains, mode, set) {
   return bank.filter((q) => {
+    if (set && Number(q.set) !== Number(set)) return false;
     if (!domains.includes(Number(q.domain))) return false;
     if (mode === "wrong") return isWrongQuestion(q);
     if (mode === "unseen") return isUnseenQuestion(q);
@@ -826,9 +842,9 @@ function renderDomainStats() {
  * questions を直接渡した場合はその問題群で開始する（誤答再挑戦で使用）。
  */
 function startSession(opts) {
-  const { domains, mode, count, order, questions } = opts;
+  const { domains, mode, count, order, questions, set } = opts;
 
-  let pool = questions || filterQuestions(domains, mode);
+  let pool = questions || filterQuestions(domains, mode, set);
   if (pool.length === 0) {
     notify("出題できる問題がありません。", "warn");
     return;
@@ -1271,11 +1287,13 @@ function bindEvents() {
 
   // 演習の開始・進行
   $("#btn-start").addEventListener("click", () => {
+    const set = $("#set-select").value;
     startSession({
       domains: selectedDomains(),
       mode: selectedRadio("mode"),
       count: selectedRadio("count"),
       order: selectedRadio("order"),
+      set: set || null,
     });
   });
   $("#btn-answer").addEventListener("click", submitAnswer);
@@ -1294,9 +1312,16 @@ function bindEvents() {
     startSession({ domains: session.domains, mode: "retry", count: "all", order: "seq", questions });
   });
   $("#btn-result-home").addEventListener("click", () => {
-    session = null;
-    renderHome();
-    showScreen("home");
+    try {
+      session = null;
+      renderHome();
+      showScreen("home");
+    } catch (e) {
+      console.error("Error navigating home:", e);
+      // ナビゲーション経由で代替実行
+      const homeBtn = Array.from(document.querySelectorAll("nav button")).find(b => b.dataset.nav === "home");
+      if (homeBtn) homeBtn.click();
+    }
   });
 
   // データ管理
