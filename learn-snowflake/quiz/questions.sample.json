@@ -1,0 +1,53 @@
+[
+  {
+    "id": "sample-101",
+    "domain": 2,
+    "subtopic": "2.2",
+    "type": "single",
+    "question": "Snowflakeのシステム定義ロールのうち、SECURITYADMIN が既定で継承しているロールはどれですか。",
+    "choices": [
+      "USERADMIN",
+      "SYSADMIN",
+      "ACCOUNTADMIN",
+      "ORGADMIN"
+    ],
+    "answer": [0],
+    "explanation": "既定のロール階層では ACCOUNTADMIN が SECURITYADMIN と SYSADMIN を継承し、SECURITYADMIN が USERADMIN を継承します。USERADMIN はユーザーとロールの作成を担当し、SECURITYADMIN はそれに加えてアカウント全体の権限付与を管理します。ORGADMIN は組織レベルの独立したロールで、この階層には含まれません。",
+    "source": "https://docs.snowflake.com/ja/user-guide/security-access-control-overview",
+    "tags": ["ロール", "アクセス制御"]
+  },
+  {
+    "id": "sample-102",
+    "domain": 3,
+    "subtopic": "3.1",
+    "type": "single",
+    "question": "Snowflakeの内部ステージのうち、ユーザーステージを参照する際に使用する記法はどれですか。",
+    "choices": [
+      "@~",
+      "@%table_name",
+      "@stage_name",
+      "@@user_name"
+    ],
+    "answer": [0],
+    "explanation": "ユーザーステージは各ユーザーに自動的に割り当てられ、@~ で参照します。テーブルステージは @%テーブル名、名前付き内部ステージは @ステージ名 で参照します。ユーザーステージとテーブルステージは自動作成されるため、削除や設定変更はできません。",
+    "source": "https://docs.snowflake.com/ja/user-guide/data-load-local-file-system-create-stage",
+    "tags": ["ステージ", "データロード"]
+  },
+  {
+    "id": "sample-103",
+    "domain": 5,
+    "subtopic": "5.1",
+    "type": "multiple",
+    "question": "Snowflakeのセキュアデータ共有（Secure Data Sharing）に関する説明として正しいものを2つ選んでください。",
+    "choices": [
+      "共有されたデータはコンシューマーアカウントにコピーされない",
+      "コンシューマーはクエリ実行時に自身の仮想ウェアハウスのコンピュートコストを負担する",
+      "共有されたデータはコンシューマーのストレージに複製され、ストレージ料金が発生する",
+      "コンシューマーは共有されたテーブルのデータを直接更新できる"
+    ],
+    "answer": [0, 1],
+    "explanation": "セキュアデータ共有ではデータの物理的なコピーが発生せず、プロバイダー側のストレージがサービス層のメタデータ経由で参照されます。そのためコンシューマー側にストレージ料金は発生せず、クエリを実行する際の仮想ウェアハウスのコンピュートコストのみを負担します。共有データは読み取り専用のため、コンシューマーが更新することはできません。",
+    "source": "https://docs.snowflake.com/ja/user-guide/data-sharing-intro",
+    "tags": ["データ共有"]
+  }
+]

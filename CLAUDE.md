@@ -64,6 +64,10 @@ claude-projects/
 └── learn-snowflake/                               ← SnowPro Core 資格学習プロジェクト
     ├── CLAUDE.md
     ├── snowflake-docs/                            ← 公式試験学習ガイドPDF（内部使用限定）
+    ├── quiz/                                      ← 演習ツール（過去問道場スタイル）
+    │   ├── index.html                             ← アプリ本体（単一HTML・依存なし）
+    │   ├── questions.sample.json                  ← 問題データのテンプレート兼サンプル
+    │   └── README.md                              ← 使い方・問題追加手順・スキーマ定義
     └── docs/
         ├── reading-list.md                        ← 公式ドキュメント読み込みリスト（分野別見出し）
         ├── notes.md                                ← 各ページの内容要約・試験対策チェックリスト（横断サマリー）
@@ -83,7 +87,7 @@ claude-projects/
 | `learn-oci/` | Oracle Cloud Infrastructure (OCI) 学習用プロジェクト | OCI 資格試験対策、インフラ設計 |
 | `learn-collibra-data-quality-and-observablity/` | Collibra Data Quality & Observability 導入調査 | Azure VM（Standalone）上での DQ Agent + Spark 構築 |
 | `learn-sqlserver-migration/` | SQL Server クラウド移行調査 | SQL MI / DMS / ノックアウト要件 / コスト最適化 |
-| `learn-snowflake/` | SnowPro Core 資格学習プロジェクト | SnowPro Core (COF-C03) 対策、公式ドキュメント読み込みリスト、Udemy誤答整理 |
+| `learn-snowflake/` | SnowPro Core 資格学習プロジェクト | SnowPro Core (COF-C03) 対策、公式ドキュメント読み込みリスト、Udemy誤答整理、演習ツール |
 
 ---
 
