@@ -208,15 +208,10 @@ summary { cursor: pointer; font-size: .93rem; }
         <legend>セット選択</legend>
         <div style="margin-bottom:8px">
           <label for="set-select">セット:</label>
-          <select id="set-select" style="padding:6px 8px; border:1px solid var(--border); border-radius:var(--radius); background:var(--surface); color:var(--text); font-size:0.9rem; cursor:pointer; min-width:200px">
-            <option value="">すべてのセット</option>
-            <option value="1">セット1 (q001-q100)</option>
-            <option value="2">セット2 (q101-q200)</option>
-            <option value="3">セット3 (q201-q300)</option>
-            <option value="4">セット4 (q301-q400)</option>
-            <option value="5">セット5 (q401-q500)</option>
-          </select>
+          <!-- 選択肢は登録済みの問題から自動生成する（buildSetOptions） -->
+          <select id="set-select" style="padding:6px 8px; border:1px solid var(--border); border-radius:var(--radius); background:var(--surface); color:var(--text); font-size:0.9rem; cursor:pointer; min-width:240px"></select>
         </div>
+        <p class="muted" style="margin:0">セットは問題IDの末尾の数字を100問ごとに区切って判定します（q001〜q100 → セット1）。選択すると、そのセット内だけで出題モード・出題数が適用されます。</p>
       </fieldset>
 
       <fieldset>
@@ -334,96 +329,10 @@ summary { cursor: pointer; font-size: .93rem; }
 <!-- ============================================================
      問題データ（同梱バンク）
      ここを直接編集して問題を追加できます。スキーマは README.md を参照。
-     ※ 以下はツールの動作確認用サンプルです。削除して構いません。
+     問題は「履歴・データ」画面の JSON インポートからも追加できます。
      ============================================================ -->
 <script type="application/json" id="question-bank">
-[
-  {
-    "id": "sample-001",
-    "domain": 1,
-    "subtopic": "1.1",
-    "type": "single",
-    "question": "Snowflakeの3層アーキテクチャにおいて、データベースストレージ層の説明として正しいものはどれですか。",
-    "choices": [
-      "共有ディスク型アーキテクチャを採用し、すべてのコンピュートノードが中央のデータリポジトリにアクセスできる",
-      "シェアードナッシング型アーキテクチャを採用し、各ノードが自身のディスクにデータを保持する",
-      "各仮想ウェアハウスが専用のストレージ領域を持ち、ウェアハウス間でデータは共有されない",
-      "ユーザーリクエストの認証とアクセス制御を担当する"
-    ],
-    "answer": [0],
-    "explanation": "Snowflakeのストレージ層は共有ディスク型で、すべてのコンピュートノードが中央データリポジトリにアクセスできます。一方、コンピュート層はMPP（大規模並列処理）でシェアードナッシング型の特性を持つため、両者を組み合わせた「ハイブリッド」アーキテクチャと呼ばれます。認証・アクセス制御はクラウドサービス層の担当です。",
-    "source": "https://docs.snowflake.com/ja/user-guide/intro-key-concepts",
-    "tags": ["アーキテクチャ"]
-  },
-  {
-    "id": "sample-002",
-    "domain": 1,
-    "subtopic": "1.3",
-    "type": "multiple",
-    "question": "Snowflakeのマイクロパーティションに関する説明として正しいものを2つ選んでください。",
-    "choices": [
-      "非圧縮で50MB〜500MBのデータが格納され、圧縮して保存される",
-      "データのロード順に沿って自動的に作成される",
-      "ユーザーがサイズや境界を明示的に指定して作成する",
-      "列指向ではなく行指向で格納される"
-    ],
-    "answer": [0, 1],
-    "explanation": "マイクロパーティションは非圧縮で50MB〜500MBのデータを保持し、実際にはSnowflakeが圧縮して格納します。テーブルへのデータ投入順に自動的に作成され、ユーザーが明示的に管理する必要はありません。また、内部的には列指向（カラムナ）で格納されるため、クエリで参照しない列をスキップできます。",
-    "source": "https://docs.snowflake.com/ja/user-guide/tables-clustering-micropartitions",
-    "tags": ["マイクロパーティション"]
-  },
-  {
-    "id": "sample-003",
-    "domain": 1,
-    "subtopic": "1.6",
-    "type": "single",
-    "question": "現在から5分前の時点のテーブル内容を参照するクエリとして正しいものはどれですか。",
-    "choices": [
-      "SELECT * FROM my_table AT(OFFSET => -300);",
-      "SELECT * FROM my_table AT(OFFSET => 300);",
-      "SELECT * FROM my_table AT(TIMESTAMP => -300);",
-      "SELECT * FROM my_table BEFORE(OFFSET => '5 minutes');"
-    ],
-    "answer": [0],
-    "explanation": "Time TravelのOFFSETパラメータは「現在時刻からの相対秒数」を指定し、過去を参照するため負の値を使います。5分前は -60*5 = -300 秒です。TIMESTAMPパラメータを使う場合は具体的なタイムスタンプ値を渡します。",
-    "source": "https://docs.snowflake.com/ja/user-guide/data-time-travel",
-    "tags": ["Time Travel"]
-  },
-  {
-    "id": "sample-004",
-    "domain": 4,
-    "subtopic": "4.2",
-    "type": "single",
-    "question": "クラスタリングキーの設定を検討すべきケースとして最も適切なものはどれですか。",
-    "choices": [
-      "数TB規模の大きなテーブルで、特定の列による絞り込みクエリのパフォーマンスが低下している",
-      "数千行の小さなテーブルで、全件スキャンのクエリを頻繁に実行している",
-      "1日に何度も全行が洗い替えされる一時的なテーブルがある",
-      "テーブルのストレージコストを削減したい"
-    ],
-    "answer": [0],
-    "explanation": "クラスタリングキーは、自動クラスタリングによる継続的な再編成コストが発生するため、十分に大きなテーブル（一般に数TB規模）で、特定列によるフィルタやJOINが頻繁に行われ、かつ更新頻度が高すぎない場合に有効です。小さなテーブルや高頻度で書き換わるテーブルではコストに見合いません。ストレージ削減が目的の機能でもありません。",
-    "source": "https://docs.snowflake.com/ja/user-guide/tables-clustering-keys",
-    "tags": ["クラスタリング"]
-  },
-  {
-    "id": "sample-005",
-    "domain": 1,
-    "subtopic": "1.2",
-    "type": "single",
-    "question": "仮想ウェアハウスに関する説明として正しいものはどれですか。",
-    "choices": [
-      "各ウェアハウスは独立したコンピュートクラスタであり、他のウェアハウスとリソースを共有しない",
-      "すべてのウェアハウスが同一のコンピュートリソースを共有し、負荷に応じて分配される",
-      "ウェアハウスを停止するとテーブルのデータも削除される",
-      "1つのアカウントで作成できるウェアハウスは1つだけである"
-    ],
-    "answer": [0],
-    "explanation": "仮想ウェアハウスは独立したコンピュートクラスタで、他のウェアハウスとリソースを共有しません。そのため、あるウェアハウスの負荷が他のウェアハウスのパフォーマンスに影響しません。ウェアハウスはコンピュート層に属し、ストレージ層のデータとは分離しているため、停止してもデータは失われません。",
-    "source": "https://docs.snowflake.com/ja/user-guide/warehouses-overview",
-    "tags": ["仮想ウェアハウス"]
-  }
-]
+[]
 </script>
 
 <script>
@@ -444,6 +353,9 @@ const DOMAINS = {
   5: { name: "データコラボレーション", weight: 10 },
 };
 const DOMAIN_IDS = Object.keys(DOMAINS).map(Number);
+
+// 1セットあたりの問題数（id の末尾数値をこの単位で区切ってセット番号を決める）
+const SET_SIZE = 100;
 
 /* ============================================================
    グローバル状態
@@ -595,6 +507,7 @@ function rebuildBank() {
     notify(`インポート済みの問題が同梱バンクと重複する id を上書きしました: ${dupes.slice(0, 5).join(", ")}`, "info");
   }
   bank = Array.from(byId.values());
+  buildSetOptions();
 }
 
 /* ============================================================
@@ -678,10 +591,50 @@ function isUnseenQuestion(q) {
   return !h || (h.correct + h.wrong) === 0;
 }
 
+/**
+ * 問題が属するセット番号を返す（判定できなければ null）。
+ * set フィールドがあればそれを優先し、無ければ id 末尾の数値を SET_SIZE 単位で区切る。
+ * 例: q001〜q100 → 1、q101〜q200 → 2
+ */
+function questionSet(q) {
+  const explicit = Number(q.set);
+  if (Number.isInteger(explicit) && explicit > 0) return explicit;
+
+  const m = String(q.id).match(/(\d+)$/);
+  if (!m) return null;
+  const n = Number(m[1]);
+  if (!Number.isInteger(n) || n <= 0) return null;
+  return Math.ceil(n / SET_SIZE);
+}
+
+/**
+ * セットごとの情報を Map（セット番号 → { count, minId, maxId }）で返す。
+ * minId / maxId はプルダウンに実データの範囲を表示するために使う。
+ */
+function setGroups() {
+  const groups = new Map();
+  for (const q of bank) {
+    const s = questionSet(q);
+    if (s === null) continue;
+    if (!groups.has(s)) groups.set(s, { count: 0, minN: null, minId: null, maxN: null, maxId: null });
+    const g = groups.get(s);
+    g.count++;
+
+    // set フィールドのみで所属が決まった問題は id に数値が無い場合があるため範囲計算から除く
+    const m = String(q.id).match(/(\d+)$/);
+    if (!m) continue;
+    const n = Number(m[1]);
+    if (g.minN === null || n < g.minN) { g.minN = n; g.minId = q.id; }
+    if (g.maxN === null || n > g.maxN) { g.maxN = n; g.maxId = q.id; }
+  }
+  return groups;
+}
+
 /** 現在の設定に合致する問題を抽出する */
 function filterQuestions(domains, mode, set) {
+  const setNo = set ? Number(set) : null;
   return bank.filter((q) => {
-    if (set && Number(q.set) !== Number(set)) return false;
+    if (setNo !== null && questionSet(q) !== setNo) return false;
     if (!domains.includes(Number(q.domain))) return false;
     if (mode === "wrong") return isWrongQuestion(q);
     if (mode === "unseen") return isUnseenQuestion(q);
@@ -761,29 +714,65 @@ function buildDomainChecks() {
   }
 }
 
+/** セット選択のプルダウンを、登録済みの問題から組み立てる */
+function buildSetOptions() {
+  const sel = $("#set-select");
+  if (!sel) return;
+  const prev = sel.value;
+  const groups = setGroups();
+  clear(sel);
+
+  sel.appendChild(el("option", { text: `すべてのセット（${bank.length}問）`, attrs: { value: "" } }));
+  for (const s of Array.from(groups.keys()).sort((a, b) => a - b)) {
+    const g = groups.get(s);
+    const range = g.minId && g.maxId ? ` (${g.minId}-${g.maxId})` : "";
+    sel.appendChild(el("option", {
+      text: `セット${s}${range}　${g.count}問`,
+      attrs: { value: String(s) },
+    }));
+  }
+  // 問題の再読み込み前に選んでいたセットが残っていれば選択状態を保つ
+  if (prev && groups.has(Number(prev))) sel.value = prev;
+}
+
+/** 選択中のセット番号を返す（すべてのセットなら null） */
+function selectedSet() {
+  const sel = $("#set-select");
+  return sel && sel.value ? sel.value : null;
+}
+
 /** ホーム画面を描画する */
 function renderHome() {
   const domains = selectedDomains();
   const mode = selectedRadio("mode");
+  const set = selectedSet();
+  const setNo = set ? Number(set) : null;
 
-  // 分野ごとの問題数をチェックボックス右端に表示
+  // 分野ごとの問題数をチェックボックス右端に表示（選択中のセットの範囲で数える）
   for (const d of DOMAIN_IDS) {
     const span = document.querySelector(`[data-domain-count="${d}"]`);
-    if (span) span.textContent = `${bank.filter((q) => Number(q.domain) === d).length}問`;
+    if (!span) continue;
+    const n = bank.filter((q) => {
+      if (Number(q.domain) !== d) return false;
+      return setNo === null || questionSet(q) === setNo;
+    }).length;
+    span.textContent = `${n}問`;
   }
 
   // モードの説明文
+  const scope = setNo === null ? "選択した分野" : `セット${setNo}の選択した分野`;
   const descs = {
-    normal: "選択した分野に登録されている問題すべてから出題します。",
-    wrong: "過去に1回でも誤答した問題だけを出題します。復習用のモードです。",
-    unseen: "まだ一度も解答していない問題だけを出題します。",
+    normal: `${scope}に登録されている問題すべてから出題します。`,
+    wrong: `${scope}のうち、過去に1回でも誤答した問題だけを出題します。復習用のモードです。`,
+    unseen: `${scope}のうち、まだ一度も解答していない問題だけを出題します。`,
   };
   $("#mode-desc").textContent = descs[mode] || "";
 
   // 開始ボタンの状態
-  const pool = filterQuestions(domains, mode);
+  const pool = filterQuestions(domains, mode, set);
   const info = $("#start-info");
   const btn = $("#btn-start");
+  const setLabel = setNo === null ? "" : `セット${setNo} / `;
   if (bank.length === 0) {
     info.textContent = "問題が1件も登録されていません。README.md を参照して問題を追加してください。";
     btn.disabled = true;
@@ -791,10 +780,10 @@ function renderHome() {
     info.textContent = "出題分野を1つ以上選択してください。";
     btn.disabled = true;
   } else if (pool.length === 0) {
-    info.textContent = "条件に一致する問題がありません。分野または出題モードを変更してください。";
+    info.textContent = `${setLabel}条件に一致する問題がありません。セット・分野・出題モードを変更してください。`;
     btn.disabled = true;
   } else {
-    info.textContent = `条件に一致する問題: ${pool.length}問`;
+    info.textContent = `${setLabel}条件に一致する問題: ${pool.length}問`;
     btn.disabled = false;
   }
 
@@ -1284,16 +1273,16 @@ function bindEvents() {
       i.addEventListener("change", renderHome);
     }
   }
+  $("#set-select").addEventListener("change", renderHome);
 
   // 演習の開始・進行
   $("#btn-start").addEventListener("click", () => {
-    const set = $("#set-select").value;
     startSession({
       domains: selectedDomains(),
       mode: selectedRadio("mode"),
       count: selectedRadio("count"),
       order: selectedRadio("order"),
-      set: set || null,
+      set: selectedSet(),
     });
   });
   $("#btn-answer").addEventListener("click", submitAnswer);
