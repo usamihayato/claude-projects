@@ -107,6 +107,13 @@ nav button[aria-current="true"] { background: var(--accent-weak); border-color: 
   border-radius: 5px; background: var(--surface-alt); color: var(--text-muted);
   font-size: .75rem; display: flex; align-items: center; justify-content: center;
 }
+.opt-body { flex: 1 1 auto; min-width: 0; }
+.opt-exp {
+  display: block; margin-top: 8px; padding-top: 8px;
+  border-top: 1px dashed currentColor;
+  font-size: .85rem; font-weight: 400; line-height: 1.65;
+  opacity: .85; white-space: pre-wrap;
+}
 .opt.is-correct { background: var(--correct-weak); border-color: var(--correct); color: var(--correct); font-weight: 500; }
 .opt.is-wrong { background: var(--wrong-weak); border-color: var(--wrong); color: var(--wrong); font-weight: 500; border-width: 2px; }
 .opt.locked { cursor: default; }
@@ -445,6 +452,10 @@ function validateQuestion(q, where) {
   if (typeof q.question !== "string" || !q.question.trim()) errs.push(`${label}: question が空です`);
   if (!Array.isArray(q.choices) || q.choices.length < 2) errs.push(`${label}: choices は2件以上の配列が必要です`);
   else if (!q.choices.every((c) => typeof c === "string")) errs.push(`${label}: choices の要素は文字列である必要があります`);
+  if (q.choiceExplanations !== undefined
+      && (!Array.isArray(q.choiceExplanations) || !q.choiceExplanations.every((c) => typeof c === "string"))) {
+    errs.push(`${label}: choiceExplanations は文字列の配列である必要があります`);
+  }
   if (!Array.isArray(q.answer) || q.answer.length === 0) errs.push(`${label}: answer は1件以上の配列が必要です`);
   else if (Array.isArray(q.choices)) {
     const bad = q.answer.some((i) => !Number.isInteger(i) || i < 0 || i >= q.choices.length);
@@ -894,7 +905,7 @@ function renderQuestion() {
       children: [
         input,
         el("span", { className: "key", text: String(i + 1) }),
-        el("span", { text: choice }),
+        el("span", { className: "opt-body", children: [el("span", { text: choice })] }),
       ],
     });
     box.appendChild(label);
@@ -941,6 +952,11 @@ function submitAnswer() {
     label.classList.add("locked");
     if (q.answer.includes(i)) label.classList.add("is-correct");
     else if (selected.includes(i)) label.classList.add("is-wrong");
+    // 選択肢ごとの解説を、その選択肢の枠内に表示する
+    const exp = Array.isArray(q.choiceExplanations) ? q.choiceExplanations[i] : null;
+    if (typeof exp === "string" && exp.trim()) {
+      label.querySelector(".opt-body").appendChild(el("span", { className: "opt-exp", text: exp }));
+    }
   }
 
   // 解説
