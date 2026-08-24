@@ -1,0 +1,10 @@
+usami [ ~ ]$ az vm create \
+  --resource-group $RG \
+  --name vm-source-sql \
+  --image MicrosoftSQLServer:sql2019-ws2022:sqldev-gen2:latest \
+  --size Standard_D2s_v3 \
+  --vnet-name $VNET \
+  --subnet snet-source \
+  --admin-username azureuser \
+  --admin-password 'P@ssw0rd_20260824' \
+  --public-ip-address ""
