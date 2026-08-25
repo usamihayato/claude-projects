@@ -1,21 +1,40 @@
 # DMS オフライン移行 通信要件 検証手順書
-### Azure 検証環境（SHIR VM + Azure DMS）で ADF 既存許可の流用可否を確認する
+### Azure 検証環境（SHIR VM + Azure DMS）でオープン→クローズの2フェーズにより必要 FQDN を実測する
 
 ---
 
 ## 検証の目的
 
 本番の SHIR は **ADF 用に構築済みのオンプレサーバ**に相乗りする想定です。
-そこで許可済みの通信要件だけで DMS が動作するかを、Azure 検証環境で事前に確認します。
+DMS がどの FQDN を実際に必要とするかを、Azure 検証環境で**2 フェーズ方式**で確定します。
+
+```
+フェーズ1｜オープン検証
+  プロキシを「全許可 + ログ記録」にする
+  → SHIR登録 ～ 移行完了まで通しで実行（＝インターネット開けた状態で成功する実績の再現）
+  → ログから実際にアクセスされた全 FQDN を抽出する
+
+フェーズ2｜クローズ検証
+  プロキシをフェーズ1で抽出した FQDN だけに絞り込む
+  → SHIR を再登録 ～ 移行を再実行
+  → 同じ結果が再現できれば「そのリストで過不足なく動く」ことが証明される
+```
+
+> **フェーズ1の「オープン」の意味に注意**
+> SHIR VM は NSG でインターネット直結を遮断したままです（STEP 4 参照）。
+> 「オープン」とはプロキシ（Squid）側のホワイトリストを一時的に全許可にすることを指します。
+> こうすることで「インターネットを開けた状態での成功」と同じ通信条件を保ちながら、
+> **どの FQDN に実際にアクセスしたかをログとして残せます**。
+> プロキシを介さず本当にインターネットへ直結してしまうと、通信先が記録できず検証になりません。
 
 | # | 検証したいこと | 判定基準 |
 |---|---|---|
-| ① | ADF 用に許可済みの FQDN だけで SHIR が DMS に登録できるか | 登録が「実行中」になる |
-| ② | DMS が追加で要求する FQDN は何か | プロキシのログに拒否記録が出るか |
+| ① | フェーズ1で SHIR 登録〜移行が成功するか（実績の再現） | 登録「実行中」＋移行「完了」 |
+| ② | フェーズ1で実際にアクセスされた FQDN は何か | access.log から全件抽出 |
 | ③ | SQL Database の PE へ TCP 1433 で到達できるか | sqlcmd で接続できる |
-| ④ | 上記の状態で移行が完走するか | DMS の移行が「完了」になる |
+| ④ | フェーズ2（②のリストのみ許可）で同じ結果が再現するか | 登録「実行中」＋移行「完了」、拒否ログなし |
 
-> **この検証で分かること**：DMS 用に追加申請すべき FQDN の**具体的なリスト**
+> **この検証で分かること**：DMS が必要とする FQDN の**過不足ない具体的なリスト**
 > **分からないこと**：本番の DNS 設計・ER 帯域・TLS 1.0（→ 後述の「検証環境と本番の差分」参照）
 
 ---
@@ -52,15 +71,16 @@
 | 本番 | 検証環境での代替 | 目的 |
 |---|---|---|
 | オンプレ SHIR サーバ | `vm-shir`（Windows Server VM） | SHIR の動作検証 |
-| 社内プロキシ（FQDN ホワイトリスト） | `vm-proxy`（Squid） | **許可 FQDN を本番と同じにして再現** |
+| 社内プロキシ（FQDN ホワイトリスト） | `vm-proxy`（Squid） | **フェーズ1で全許可→ログ記録、フェーズ2で絞り込み** |
 | ExpressRoute → Azure PE | VNet 内ルーティング | PE への 1433 到達性 |
 | オンプレ SQL Server 2008 R2 | `vm-source-sql` | 移行元 |
 | Azure SQL Database（本番） | Azure SQL Database（検証） | 移行先 |
 
 > **Squid を使う理由**
 > 本番の SHIR はプロキシを明示設定（`diahost.exe.config`）して通信します。
-> Squid なら同じ構成を再現でき、かつ **access.log で拒否された FQDN が特定できます**。
-> これが本検証の核心です。
+> Squid なら同じ構成を再現でき、かつ **access.log で通信先の FQDN を全て記録できます**。
+> フェーズ1では全許可にしてログを取り、フェーズ2ではそのログから作った許可リストだけに絞る。
+> この往復が本検証の核心です。
 
 ---
 
@@ -69,11 +89,11 @@
 | 項目 | 必要なもの |
 |---|---|
 | Azure サブスクリプション | 共同作成者以上の権限 |
-| ADF 用の許可 FQDN リスト | **本番のプロキシ設定から現物を入手**（推測しない） |
 | 作業端末 | Azure CLI または Azure Portal |
+| （任意）本番プロキシの既存許可 FQDN リスト | あればフェーズ1で抽出した結果との**突き合わせ**に使える |
 
-> ⚠️ **最重要**：本検証の価値は「本番と同じホワイトリスト」を Squid に入れる点にあります。
-> 本番プロキシの設定を必ず先に入手してください。
+> 本手順はフェーズ1で必要 FQDN を実測するため、事前に本番のホワイトリストを入手できていなくても進められます。
+> 入手できている場合は、フェーズ1の抽出結果と比較することで「ADF 許可分で足りるか／追加が要るか」も同時に判定できます。
 
 ---
 
@@ -132,34 +152,26 @@ sudo apt update && sudo apt install -y squid
 sudo cp /etc/squid/squid.conf /etc/squid/squid.conf.bak
 ```
 
-### 2-3 ホワイトリストの設定
+### 2-3 フェーズ1用の設定（全許可＋ログ記録）
 
 `/etc/squid/squid.conf` を以下の内容で作成します。
+**この段階ではドメインを絞り込みません。** 目的は「何にアクセスしたか」を漏れなく記録することです。
 
 ```
-# ===== 検証用 Squid 設定 =====
+# ===== フェーズ1: 全許可 + ログ記録 =====
 http_port 3128
 
 # 接続元（SHIR サブネット）
 acl shir_net src 10.0.1.0/24
 
-# ▼▼▼ ここに「ADF 用に本番で許可済みの FQDN」だけを列挙する ▼▼▼
-# 先頭のドットはサブドメイン全体（ワイルドカード相当）を意味する
-acl adf_allowed dstdomain .servicebus.windows.net
-acl adf_allowed dstdomain .frontend.clouddatahub.net
-acl adf_allowed dstdomain download.microsoft.com
-acl adf_allowed dstdomain login.microsoftonline.com
-acl adf_allowed dstdomain .datafactory.azure.net
-# ▲▲▲ 本番の設定に合わせて必ず修正すること ▲▲▲
-
 acl SSL_ports port 443
 acl CONNECT method CONNECT
 
 http_access deny CONNECT !SSL_ports
-http_access allow shir_net adf_allowed
+http_access allow shir_net
 http_access deny all
 
-# 拒否内容を追跡するためログを詳細化
+# 通信先を漏れなく記録する
 access_log /var/log/squid/access.log squid
 ```
 
@@ -177,8 +189,11 @@ sudo tail -f /var/log/squid/access.log
 ```
 
 > **ログの見方**
-> - `TCP_TUNNEL/200` → 許可されて通った
-> - `TCP_DENIED/403` → **ホワイトリストにないため拒否された＝追加申請が必要な FQDN**
+> - `TCP_TUNNEL/200` → 通過した通信（フェーズ1では基本的に全てこれになるはず）
+> - `TCP_DENIED/403` → 拒否された通信（フェーズ1で出たら shir_net の設定ミスなどを疑う）
+>
+> フェーズ1のログが「実際に必要な FQDN の正解データ」になります。
+> フェーズ2への絞り込みは STEP 9 で行います。
 
 ---
 
@@ -379,7 +394,7 @@ az provider register --namespace Microsoft.DataMigration
 
 ---
 
-## STEP 7｜検証①：ADF 許可 FQDN だけで SHIR が登録できるか
+## STEP 7｜フェーズ1：SHIR のインストールとプロキシ設定
 
 ### 7-1 SHIR のインストール
 
@@ -413,89 +428,47 @@ https://www.microsoft.com/download/details.aspx?id=39717
 Restart-Service DIAHostService
 ```
 
-### 7-3 登録キーの取得と登録
+> この時点で Squid はフェーズ1（全許可）のため、SHIR からのアクセスは全て通過します。
+> 「NSG でインターネット直結を遮断しつつ、プロキシ経由なら何でも通る」＝
+> これまで確認できていた「インターネットを開けた状態での成功」と同じ通信条件です。
+
+---
+
+## STEP 8｜フェーズ1：登録・移行を通しで実行し、必要 FQDN を確定
+
+### 8-1 登録キーの取得と登録
 
 1. Portal → DMS インスタンス → 「統合ランタイム」→ 認証キー1 をコピー
 2. `Microsoft Integration Runtime Configuration Manager` を起動
 3. キーを貼り付けて「登録」
+4. 状態が「実行中」になることを確認
 
-### 7-4 判定
+### 8-2 サービス URL の確認
 
-**Squid のログを見ながら**登録を実行します。
+1. 同 Configuration Manager の「診断」タブ →「接続のテスト」を実行
+2. 同画面の **「サービス URL」** を開く（DMS インスタンス固有のエンドポイントが一覧表示される）
 
-| 結果 | 意味 | 対応 |
-|---|---|---|
-| 状態が「実行中」になった | ADF 許可分で足りている | ✅ 追加申請不要（STEP 8 でさらに確認） |
-| 登録が失敗した | 不足 FQDN がある | Squid ログの `TCP_DENIED` を確認 → 記録 |
-
-```bash
-# 拒否された FQDN だけを抽出
-sudo grep TCP_DENIED /var/log/squid/access.log | awk '{print $7}' | sort -u
-```
-
-> **ここで出力された FQDN が「DMS 用に追加申請が必要なもの」です。**
-> 1 つずつ squid.conf に追加 → 再起動 → 再登録 を繰り返し、登録が通るまで確認します。
-> 追加した FQDN は必ず記録してください（STEP 11 の記録シートへ）。
-
----
-
-## STEP 8｜検証②：サービス URL と接続テスト
-
-登録成功後、SHIR が実際に必要とするエンドポイントを確認します。
-
-1. `Microsoft Integration Runtime Configuration Manager` を起動
-2. 「診断」タブ →「接続のテスト」を実行
-3. 同画面の **「サービス URL」** を開く
-
-> **サービス URL には DMS インスタンス固有のエンドポイントが表示されます。**
-> ワイルドカード（`*.servicebus.windows.net` 等）でカバーされているか確認し、
-> カバーされていないものは追加申請リストに加えてください。
-
-さらに Squid ログで実通信を確認します。
-
-```bash
-# 実際にアクセスされた FQDN の一覧（許可・拒否問わず）
-sudo awk '{print $7}' /var/log/squid/access.log | cut -d: -f1 | sort -u
-```
-
----
-
-## STEP 9｜検証③：SQL Database PE への TCP 1433
+### 8-3 SQL Database PE への疎通確認（フェーズ1のうちに実施）
 
 `vm-shir` の PowerShell / コマンドプロンプトで実行します。
 
-### 9-1 DNS 解決の確認
-
 ```powershell
+# DNS解決の確認（期待値: 10.0.3.x が返ること）
 nslookup （論理サーバー名）.database.windows.net
-```
 
-> **期待値**：`10.0.3.x`（PE のプライベート IP）が返ること
-> グローバル IP が返る場合は Private DNS ゾーンの紐付けを見直してください。
-
-### 9-2 ポート疎通の確認
-
-```powershell
+# ポート疎通の確認
 Test-NetConnection （論理サーバー名）.database.windows.net -Port 1433
 ```
 
-> `TcpTestSucceeded : True` であれば OK
-
-### 9-3 SQL 接続の確認
-
 ```cmd
+REM SQL接続の確認
 sqlcmd -S （論理サーバー名）.database.windows.net -U dmsuser -P （パスワード） -Q "SELECT @@VERSION"
-```
 
-### 9-4 移行元 SQL Server への疎通も確認
-
-```cmd
+REM 移行元SQL Serverへの疎通も確認
 sqlcmd -S 10.0.2.4 -U migrateuser -P （パスワード） -Q "SELECT @@VERSION"
 ```
 
----
-
-## STEP 10｜検証④：実際に移行を実行
+### 8-4 移行を最後まで実行する
 
 1. Portal → DMS インスタンス → 「移行プロジェクトの新規作成」
 2. ソース：`vm-source-sql`（10.0.2.4）／SQL 認証／`migrateuser`
@@ -504,15 +477,112 @@ sqlcmd -S 10.0.2.4 -U migrateuser -P （パスワード） -Q "SELECT @@VERSION"
 5. スキーマ移行 ✅ ／ データ移行 ✅
 6. 「移行の開始」
 
-### 判定
-
 ```sql
 -- 移行先の Azure SQL Database で実行（3 件返れば成功）
 SELECT COUNT(*) FROM dbo.T1;
 ```
 
-> **移行実行中も Squid のログを監視してください。**
-> 登録時には現れなかった FQDN が、移行実行時に初めて要求される可能性があります。
+### 8-5 実際にアクセスされた FQDN を確定する
+
+登録〜移行が完走したら、Squid のログから通信先 FQDN を**全て**抽出します。
+
+```bash
+# 実際にアクセスされた FQDN の一覧（登録時〜移行完了時までの累積）
+sudo awk '{print $7}' /var/log/squid/access.log | cut -d: -f1 | sort -u
+```
+
+> これが **「DMS のオフライン移行に実際に必要な FQDN の一覧」** です。
+> STEP 11 の記録シートに書き写してください。
+> （任意）本番のADF許可リストを入手済みなら、ここで突き合わせて過不足を確認できます。
+
+---
+
+## STEP 9｜フェーズ2：Squid をフェーズ1で確定した FQDN だけに絞り込む
+
+STEP 8-5 で確定したリストだけを許可するよう、Squid の設定を書き換えます。
+
+```
+# ===== フェーズ2: 絞り込み後の許可リスト =====
+http_port 3128
+
+acl shir_net src 10.0.1.0/24
+
+# ▼▼▼ STEP 8-5 で確定した FQDN をここに列挙する（例） ▼▼▼
+acl dms_required dstdomain .servicebus.windows.net
+acl dms_required dstdomain .frontend.clouddatahub.net
+acl dms_required dstdomain login.microsoftonline.com
+# 実際に確定したリストに置き換えること
+# ▲▲▲
+
+acl SSL_ports port 443
+acl CONNECT method CONNECT
+
+http_access deny CONNECT !SSL_ports
+http_access allow shir_net dms_required
+http_access deny all
+
+access_log /var/log/squid/access.log squid
+```
+
+```bash
+sudo systemctl restart squid
+```
+
+> ログを引き継ぎたくない場合は `sudo truncate -s 0 /var/log/squid/access.log` で一度クリアしておくと、
+> フェーズ2の結果だけを見やすくできます。
+
+---
+
+## STEP 10｜フェーズ2：SHIR を再登録し、移行を再実行して過不足を確認
+
+### 10-1 SHIR の再登録
+
+プロキシ設定（`diahost.exe.config`）は STEP 7-2 のまま変更不要です。Squid 側を絞ったため、
+サービス再起動後に改めて疎通・登録状態を確認します。
+
+```powershell
+Restart-Service DIAHostService
+```
+
+`Microsoft Integration Runtime Configuration Manager` の「診断」タブで「接続のテスト」を再実行し、
+全項目が成功することを確認します。
+
+### 10-2 移行を再実行する
+
+STEP 8-4 と同じ手順で、**別のターゲット DB（`TestDB2`）** に対して移行を実行します。
+同じ `TestDB1` を使い回すと結果の切り分けが難しくなるため、フェーズ2専用に新規作成しておくと明確です。
+
+```bash
+az sql db create --resource-group $RG --server $SQLSERVER --name TestDB2 --service-objective GP_Gen5_2
+```
+
+1. Portal → DMS インスタンス → 「移行プロジェクトの新規作成」
+2. ソース：`vm-source-sql`（10.0.2.4）
+3. ターゲット：`（論理サーバー名）.database.windows.net` の `TestDB2`
+4. 「移行の開始」
+
+```sql
+-- 移行先 TestDB2 で実行（3 件返れば成功）
+SELECT COUNT(*) FROM dbo.T1;
+```
+
+### 10-3 判定
+
+```bash
+# フェーズ2で拒否が出ていないか確認
+sudo grep TCP_DENIED /var/log/squid/access.log
+```
+
+| 結果 | 意味 | 対応 |
+|---|---|---|
+| 登録「実行中」＋移行「完了」＋拒否ログなし | **絞り込んだリストで過不足なく動作する** | ✅ このリストを申請すればよい |
+| `TCP_DENIED` が出た | フェーズ1で拾いきれなかった FQDN がある（時限的な通信など） | 拒否された FQDN を acl に追加 → 再起動 → 再実行 |
+| 登録・移行自体が失敗した | ネットワーク以外の要因の可能性 | プロキシ設定・PE疎通を STEP 8-3 の内容で再確認 |
+
+> フェーズ1は1回の実行で全通信パターンを拾いきれない場合があります
+> （初回のみ発生する証明書検証や、時間経過後にだけ発生する通信など）。
+> フェーズ2で拒否が出ても異常ではなく、**それこそがフェーズ2を行う意味**です。
+> 出なくなるまで追加→再実行を繰り返し、最終的なリストを確定させてください。
 
 ---
 
@@ -520,13 +590,28 @@ SELECT COUNT(*) FROM dbo.T1;
 
 検証しながら以下を埋めてください。そのまま申請資料になります。
 
-### 追加申請が必要な FQDN
+### フェーズ1で確定した必要 FQDN（＝申請リストの元データ）
 
-| # | FQDN | ポート | 検出タイミング | ADF 許可済みか | 備考 |
-|---|---|---|---|---|---|
-| 1 | | 443 | SHIR 登録時 / 移行実行時 | ✅ / ❌ | |
-| 2 | | 443 | | | |
-| 3 | | 443 | | | |
+| # | FQDN | ポート | 用途（推定） | 本番 ADF で許可済みか |
+|---|---|---|---|---|
+| 1 | | 443 | | ✅ / ❌ / 未確認 |
+| 2 | | 443 | | |
+| 3 | | 443 | | |
+| 4 | | 443 | | |
+| 5 | | 443 | | |
+
+> 「本番 ADF で許可済みか」列は、本番のホワイトリストを入手できている場合のみ埋めます。
+> ❌ が付いた行が「DMS 用に新規で申請すべき FQDN」です。
+
+### フェーズ2の結果（絞り込みリストの妥当性）
+
+| 項目 | 結果 |
+|---|---|
+| 再登録が「実行中」になったか | ☐ なった ☐ ならなかった |
+| 移行（TestDB2）が「完了」したか | ☐ 完了 ☐ 失敗 |
+| フェーズ2実行中に TCP_DENIED が出たか | ☐ 出た（右に追記）☐ 出なかった |
+| 追加で許可した FQDN（出た場合） | |
+| 最終的に確定した FQDN 数 | 件 |
 
 ### ポート要件
 
@@ -540,10 +625,10 @@ SELECT COUNT(*) FROM dbo.T1;
 
 | 検証項目 | 結果 |
 |---|---|
-| ① ADF 許可分だけで SHIR 登録できたか | ☐ できた ☐ 追加必要 |
-| ② サービス URL がワイルドカードでカバーされるか | ☐ カバー済 ☐ 追加必要 |
+| ① フェーズ1（オープン）で登録〜移行が成功したか | ☐ 成功 ☐ 失敗 |
+| ② フェーズ1のログから必要 FQDN を確定できたか | ☐ できた（件） |
 | ③ PE への 1433 が通ったか | ☐ 通った ☐ 要 FW 申請 |
-| ④ 移行が完走したか | ☐ 完走 ☐ 失敗 |
+| ④ フェーズ2（絞り込み後）で同じ結果が再現したか | ☐ 再現した ☐ 追加が必要だった |
 
 ---
 
@@ -593,18 +678,19 @@ az group delete --name $RG --yes --no-wait
 
 | 項目 | 確認 |
 |---|---|
-| 本番プロキシの許可 FQDN リストを入手した | ☐ |
-| Squid のホワイトリストを本番と同じ内容にした | ☐ |
 | NSG で SHIR VM のインターネット直結を遮断した | ☐ |
 | 遮断できていることを Test-NetConnection で確認した | ☐ |
-| Squid の access.log を監視しながら検証した | ☐ |
-| SHIR が「実行中」になった | ☐ |
-| 拒否された FQDN を全て記録した | ☐ |
-| 「サービス URL」の内容を確認した | ☐ |
-| PE の DNS がプライベート IP を返した | ☐ |
-| PE へ TCP 1433 で接続できた | ☐ |
-| 移行が完走し件数が一致した | ☐ |
-| 移行実行中のログも確認した | ☐ |
+| Squid をフェーズ1（全許可＋ログ記録）で起動した | ☐ |
+| **フェーズ1**：SHIR が「実行中」になった | ☐ |
+| **フェーズ1**：「サービス URL」の内容を確認した | ☐ |
+| **フェーズ1**：PE の DNS がプライベート IP を返した | ☐ |
+| **フェーズ1**：PE へ TCP 1433 で接続できた | ☐ |
+| **フェーズ1**：移行（TestDB1）が完走し件数が一致した | ☐ |
+| **フェーズ1**：access.log から必要 FQDN を全件抽出した | ☐ |
+| Squid をフェーズ2（絞り込みリスト）に切り替えた | ☐ |
+| **フェーズ2**：SHIR が再度「実行中」になった | ☐ |
+| **フェーズ2**：移行（TestDB2）が完走し件数が一致した | ☐ |
+| **フェーズ2**：TCP_DENIED が出なかった（出た場合は追記して再実行） | ☐ |
 | 記録シートを埋めた | ☐ |
 | 検証環境を削除した | ☐ |
 
@@ -616,9 +702,19 @@ az group delete --name $RG --yes --no-wait
 
 ```
 確認項目：
-① Squid のログに TCP_DENIED が出ていないか
+① Squid のログに TCP_DENIED が出ていないか（フェーズ1では基本的に出ないはず）
 ② キーをコピーミスしていないか（前後の空白）
 ③ DIAHostService を再起動したか（プロキシ設定変更後は必須）
+```
+
+### フェーズ2でだけ登録・移行が失敗する
+
+```
+確認項目：
+① sudo grep TCP_DENIED /var/log/squid/access.log で拒否FQDNを特定する
+② そのFQDNをacl dms_requiredに追加し、Squidを再起動する
+③ フェーズ1で1回の実行では拾いきれなかった通信（初回のみの証明書検証等）の可能性が高いため、
+   Squidの設定を更新して再実行すればよい（異常ではない）
 ```
 
 ### プロキシ設定が効いていない（NSG で遮断されて通信できない）
