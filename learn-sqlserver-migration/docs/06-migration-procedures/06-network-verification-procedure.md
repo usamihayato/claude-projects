@@ -124,11 +124,40 @@ az network vnet subnet create --resource-group $RG --vnet-name $VNET \
   --name snet-proxy --address-prefix 10.0.4.0/24
 ```
 
+### 1-2 Azure Bastion（Developer SKU）のデプロイ
+
+各 VM は管理用のパブリック IP を持たせない構成にするため、踏み台として Bastion を使います。
+Standard SKU は時間課金＋専用サブネット（`AzureBastionSubnet` /26 以上）が必要ですが、
+**Developer SKU は無料・専用サブネット不要**なので検証用途に向いています。
+
+> ⚠️ Developer SKU は 2026-08 時点で **Azure Portal からのみデプロイ可能**です
+> （VM 作成後に手順を実施するため、このタイミングでは「後で使う」ことを把握しておくだけで OK です）。
+> 実際のデプロイは STEP 2〜4 で VM を作成した後、以下の手順で行います。
+
+**デプロイ手順（VM 作成後に実施）**
+
+1. Azure Portal → 対象 VM（例：`vm-shir`）→「接続」→「Bastion」タブ
+2. 「この仮想ネットワークに Bastion をデプロイする（無料の Developer SKU）」というリンクが表示される
+3. クリックするだけで、`vnet-verify` に対して Developer SKU の Bastion が有効化される
+4. 一度有効化すれば、**同じ VNet 内の他の VM（`vm-proxy`／`vm-source-sql`）でも同じ「接続」→「Bastion」タブから流用できる**
+
+**Developer SKU の制約（再掲）**
+
+| 制約 | 内容 |
+|---|---|
+| VNet ピアリング先への接続 | 不可（Bastion をデプロイした VNet 内のみ） |
+| ネイティブクライアント（mstsc/ssh コマンド） | 非対応。ブラウザ経由のみ |
+| 同時接続 | 複数セッション同時は非推奨 |
+
+> 本検証の VNet（`vnet-verify`）は単体構成でピアリングを行わないため、上記制約は影響しません。
+
 ---
 
 ## STEP 2｜プロキシ VM（Squid）を構築
 
 ### 2-1 VM 作成
+
+パブリック IP は付与しません（管理アクセスは Bastion 経由に統一するため）。
 
 ```bash
 az vm create \
@@ -140,12 +169,13 @@ az vm create \
   --subnet snet-proxy \
   --admin-username azureuser \
   --generate-ssh-keys \
-  --public-ip-sku Standard
+  --public-ip-address ""
 ```
 
 ### 2-2 Squid のインストール
 
-VM に SSH でログインして実行します。
+Azure Portal → `vm-proxy` →「接続」→「Bastion」タブから SSH 接続し、ブラウザ上のターミナルで実行します。
+（STEP 1-2 で Bastion を未デプロイの場合は、先にそちらを実施してください）
 
 ```bash
 sudo apt update && sudo apt install -y squid
@@ -219,7 +249,7 @@ az vm create \
 
 ### 検証用データベースの作成
 
-VM に RDP して SSMS で実行します。
+Azure Portal → `vm-source-sql` →「接続」→「Bastion」タブから RDP 接続し、SSMS で実行します。
 
 ```sql
 CREATE DATABASE TestDB1;
@@ -289,7 +319,7 @@ az network vnet subnet update --resource-group $RG --vnet-name $VNET \
 
 ### 4-3 遮断できていることを確認
 
-`vm-shir` に RDP（Bastion 経由推奨）してから PowerShell で実行します。
+Azure Portal → `vm-shir` →「接続」→「Bastion」タブから RDP 接続し、PowerShell で実行します。
 
 ```powershell
 # 直接インターネットに出られないこと（失敗すれば OK）
@@ -398,13 +428,26 @@ az provider register --namespace Microsoft.DataMigration
 
 ### 7-1 SHIR のインストール
 
-`vm-shir` にインターネット直結がないため、**作業端末でダウンロードしてから VM にコピー**します。
+> ⚠️ **Bastion Developer SKU はファイル転送に対応していません**（ブラウザ経由の RDP/SSH のみ）。
+> 作業端末からインストーラーをコピーする方法は使えないため、
+> **VM 上から Squid プロキシ経由で直接ダウンロード**します。
+> Squid はこの時点でフェーズ1（全許可）のため、`download.microsoft.com` 宛の通信も通過します。
 
-```
-https://www.microsoft.com/download/details.aspx?id=39717
+Azure Portal → `vm-shir` →「接続」→「Bastion」タブから RDP 接続し、PowerShell で実行します。
+
+```powershell
+$proxy = "http://10.0.4.4:3128"
+Invoke-WebRequest `
+  -Uri "https://download.microsoft.com/download/E/4/7/E4771905-1079-445B-8BF9-8A1A075D8A10/IntegrationRuntime_5.<最新パッチ番号>.msi" `
+  -Proxy $proxy `
+  -OutFile "C:\Temp\IntegrationRuntime.msi"
 ```
 
-バージョン **5.37 以上** を使用します。
+> ⚠️ **ダウンロード URL は変わる可能性があります**
+> 上記 URL は例です。実際の最新版 URL は作業端末のブラウザで
+> https://www.microsoft.com/download/details.aspx?id=39717 を開き、
+> 「ダウンロード」ボタンの実リンク（.msi の直接 URL）をコピーして使ってください。
+> バージョン **5.37 以上** を使用します。
 
 ### 7-2 プロキシ設定
 
@@ -650,6 +693,7 @@ az group delete --name $RG --yes --no-wait
 | Azure SQL Database（GP_Gen5_2） | 稼働時間課金 |
 | Azure DMS（Standard） | Standard SKU は課金なし |
 | Private Endpoint | 時間課金＋データ処理課金（少額） |
+| Azure Bastion（Developer SKU） | **無料** |
 
 > 検証は数日で終わる想定です。**放置すると VM のコストが積み上がる**ため、
 > 中断する場合は VM を停止（割り当て解除）してください。
@@ -678,6 +722,7 @@ az group delete --name $RG --yes --no-wait
 
 | 項目 | 確認 |
 |---|---|
+| Azure Bastion（Developer SKU）をデプロイした | ☐ |
 | NSG で SHIR VM のインターネット直結を遮断した | ☐ |
 | 遮断できていることを Test-NetConnection で確認した | ☐ |
 | Squid をフェーズ1（全許可＋ログ記録）で起動した | ☐ |
