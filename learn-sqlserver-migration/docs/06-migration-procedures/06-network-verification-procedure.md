@@ -234,13 +234,19 @@ az vm create \
   --resource-group $RG \
   --name vm-source-sql \
   --image MicrosoftSQLServer:sql2019-ws2022:sqldev-gen2:latest \
-  --size Standard_D2s_v3 \
+  --size Standard_B2s \
   --vnet-name $VNET \
   --subnet snet-source \
   --admin-username azureuser \
   --admin-password '（強いパスワード）' \
   --public-ip-address ""
 ```
+
+> **サイズを `Standard_B2s`（バースト可能・2 vCPU/4GB）にしている理由**
+> 通信要件の検証には性能は関係なく、テストデータも 3 行のみです。
+> `Dsv3` 系の汎用 VM より安価なバースト可能シリーズで十分なため、コスト優先でこのサイズにしています。
+
+---
 
 > ⚠️ **SQL Server 2008 R2 は Marketplace に存在しません**
 > 通信要件（ポート・FQDN）の検証には SQL Server のバージョンは影響しないため、
@@ -281,13 +287,17 @@ az vm create \
   --resource-group $RG \
   --name vm-shir \
   --image Win2022Datacenter \
-  --size Standard_D2s_v3 \
+  --size Standard_B2ms \
   --vnet-name $VNET \
   --subnet snet-shir \
   --admin-username azureuser \
   --admin-password '（強いパスワード）' \
   --public-ip-address ""
 ```
+
+> **サイズを `Standard_B2ms`（バースト可能・2 vCPU/8GB）にしている理由**
+> SHIR の公式推奨（2 コア／8GB メモリ）は満たしつつ、`Dsv3` 系の汎用 VM より安価な
+> バースト可能シリーズを選んでいます。通信要件の検証自体には性能は影響しません。
 
 ### 4-2 NSG でインターネット直結を遮断（本番の閉域環境を再現）
 
@@ -351,8 +361,19 @@ az sql db create \
   --resource-group $RG \
   --server $SQLSERVER \
   --name TestDB1 \
-  --service-objective GP_Gen5_2
+  --edition GeneralPurpose \
+  --family Gen5 \
+  --capacity 1 \
+  --compute-model Serverless \
+  --min-capacity 0.5 \
+  --auto-pause-delay 60
 ```
+
+> **Serverless（自動一時停止）にしている理由**
+> 検証は数日にわたって断続的に実行するため、常時稼働の GP_Gen5_2（Provisioned）だと
+> アイドル時間にも課金が発生します。Serverless なら 60 分未使用で自動一時停止し、
+> 次に接続があると自動再開します（再開時に数十秒〜1分程度の遅延あり）。
+> 通信要件の検証自体には影響しません。
 
 ### 5-2 パブリックアクセスを無効化（本番と同条件）
 
@@ -391,6 +412,10 @@ az network private-endpoint dns-zone-group create \
 ### 5-4 移行用ユーザーの作成
 
 パブリックアクセスを無効にしたため、`vm-shir` から SSMS で接続して実行します。
+
+> Serverless（STEP 5-1）は作成直後・アイドル後は一時停止状態のため、
+> 最初の接続で自動再開が走り数十秒〜1分ほど待たされることがあります。
+> タイムアウトした場合は再接続すれば通常つながります。
 
 ```sql
 -- master で実行
@@ -596,7 +621,9 @@ STEP 8-4 と同じ手順で、**別のターゲット DB（`TestDB2`）** に対
 同じ `TestDB1` を使い回すと結果の切り分けが難しくなるため、フェーズ2専用に新規作成しておくと明確です。
 
 ```bash
-az sql db create --resource-group $RG --server $SQLSERVER --name TestDB2 --service-objective GP_Gen5_2
+az sql db create --resource-group $RG --server $SQLSERVER --name TestDB2 \
+  --edition GeneralPurpose --family Gen5 --capacity 1 \
+  --compute-model Serverless --min-capacity 0.5 --auto-pause-delay 60
 ```
 
 1. Portal → DMS インスタンス → 「移行プロジェクトの新規作成」
@@ -677,6 +704,24 @@ sudo grep TCP_DENIED /var/log/squid/access.log
 
 ## STEP 12｜後片付け
 
+### 12-1 自動シャットダウンの設定（推奨・検証中のコスト削減）
+
+VM の消し忘れによる課金を防ぐため、各 VM 作成後に自動シャットダウンを設定しておきます
+（Azure SQL Database は STEP 5-1／STEP 10-2 で Serverless にしているため未使用時は自動一時停止し、
+この設定は不要です）。
+
+```bash
+# 例：日本時間 20:00 に自動シャットダウン（3台とも同様に設定）
+az vm auto-shutdown --resource-group $RG --name vm-shir       --time 2000 --timezone "Tokyo Standard Time"
+az vm auto-shutdown --resource-group $RG --name vm-source-sql --time 2000 --timezone "Tokyo Standard Time"
+az vm auto-shutdown --resource-group $RG --name vm-proxy      --time 2000 --timezone "Tokyo Standard Time"
+```
+
+> 翌日の検証再開時は Azure Portal または `az vm start` で起動してください。
+> 自動シャットダウンは「割り当て解除（deallocate）」相当のため、停止中は VM 分の課金は発生しません。
+
+### 12-2 検証完了後の削除
+
 検証完了後、**リソースグループごと削除**します。
 
 ```bash
@@ -687,16 +732,17 @@ az group delete --name $RG --yes --no-wait
 
 | リソース | 課金 |
 |---|---|
-| vm-shir（D2s_v3） | 稼働時間課金 |
-| vm-source-sql（D2s_v3・SQL Developer） | VM 分のみ（Developer エディションのライセンスは無償） |
-| vm-proxy（B1s） | 稼働時間課金（少額） |
-| Azure SQL Database（GP_Gen5_2） | 稼働時間課金 |
+| vm-shir（B2ms・バースト可能） | 稼働時間課金（D2s_v3 比で低コスト。自動シャットダウン推奨） |
+| vm-source-sql（B2s・バースト可能・SQL Developer） | VM 分のみ（Developer エディションのライセンスは無償。自動シャットダウン推奨） |
+| vm-proxy（B1s） | 稼働時間課金（少額。自動シャットダウン推奨） |
+| Azure SQL Database（GP Serverless・1 vCore） | 使用量課金＋60分未使用で自動一時停止（アイドル時はほぼ無課金） |
 | Azure DMS（Standard） | Standard SKU は課金なし |
 | Private Endpoint | 時間課金＋データ処理課金（少額） |
 | Azure Bastion（Developer SKU） | **無料** |
 
-> 検証は数日で終わる想定です。**放置すると VM のコストが積み上がる**ため、
-> 中断する場合は VM を停止（割り当て解除）してください。
+> 検証は数日で終わる想定です。VM は自動シャットダウンを設定していても、
+> **リソースグループ自体は残っているとその他の少額課金（PE 等）が積み上がる**ため、
+> 検証が完全に終わったら STEP 12-2 で削除してください。
 
 ---
 
