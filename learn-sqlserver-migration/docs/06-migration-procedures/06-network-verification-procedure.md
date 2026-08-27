@@ -265,16 +265,60 @@ CREATE TABLE dbo.T1 (id INT IDENTITY PRIMARY KEY, val NVARCHAR(100));
 INSERT INTO dbo.T1 (val) VALUES ('test1'), ('test2'), ('test3');
 GO
 
--- SQL 認証を有効化（混合モード）してから移行用ユーザーを作成
+-- 混合モード（SQL + Windows認証）を有効化（既定では Windows 認証のみ）
+USE [master];
+EXEC xp_instance_regwrite N'HKEY_LOCAL_MACHINE', N'Software\Microsoft\MSSQLServer\MSSQLServer', N'LoginMode', REG_DWORD, 2;
+GO
+```
+
+レジストリの変更を反映させるため、SQL Server サービスを再起動します（`vm-source-sql` の PowerShell で実行）。
+
+```powershell
+Restart-Service MSSQLSERVER -Force
+```
+
+再起動後、SSMS で再接続し、混合モードが有効になったことを確認します。
+
+```sql
+-- 結果が 0 なら混合モード有効（1のままなら再起動できていない可能性）
+SELECT SERVERPROPERTY('IsIntegratedSecurityOnly');
+```
+
+混合モードを確認できたら、移行用ユーザーを作成します。
+
+```sql
 CREATE LOGIN migrateuser WITH PASSWORD = '（強いパスワード）';
 USE TestDB1;
 CREATE USER migrateuser FOR LOGIN migrateuser;
 ALTER ROLE db_datareader ADD MEMBER migrateuser;
 GO
+
+-- DMS の公式最小要件：db_datareader に加えて VIEW ANY DEFINITION（サーバー権限）が必要
+-- （参考: https://learn.microsoft.com/ja-jp/data-migration/sql-server/database/database-migration-service）
+GRANT VIEW ANY DEFINITION TO migrateuser;
+GO
 ```
 
 > SQL Server 構成マネージャーで **TCP/IP プロトコルを有効化**し、
 > Windows ファイアウォールで **TCP 1433 の受信を許可**してください。
+>
+> ```powershell
+> # TCP/IPが有効か確認（LISTENINGが出ればOK。出ない場合はSQL Server構成マネージャーで有効化しサービス再起動）
+> netstat -an | findstr :1433
+>
+> # インバウンドルールを追加（SQL Serverのマーケットプレイスイメージには既定で入っていない）
+> New-NetFirewallRule -DisplayName "SQL Server 1433" -Direction Inbound -Protocol TCP -LocalPort 1433 -Action Allow
+> ```
+>
+> ⚠️ `Get-NetFirewallRule -DisplayName "*SQL*"` で表示されるルールは既定では
+> AppContainer（Rサービス/Pythonサービス用サンドボックス）の**アウトバウンド**ブロックルールのみで、
+> **1433番へのインバウンド許可ルールは含まれていません**。上記コマンドで明示的に追加する必要があります。
+>
+> **本番適用時の確認事項**：本番の実機（現行のオンプレWindows Server／SQL Server 2008 R2）でも、
+> 上記と同じ手順（`netstat`でのLISTENING確認・インバウンドルールの有無）を事前に確認すること。
+> 検証環境（マーケットプレイスイメージ）で起きたのと同様に、1433のインバウンドルールが
+> 既定で入っていない可能性がある。SHIRからの疎通を移行当日に初めて試すのではなく、
+> 事前に本番機側でも `Test-NetConnection localhost -Port 1433` 等でLISTENING状態を確認しておく。
 
 ---
 
@@ -411,19 +455,117 @@ az network private-endpoint dns-zone-group create \
 
 ### 5-4 移行用ユーザーの作成
 
-パブリックアクセスを無効にしたため、`vm-shir` から SSMS で接続して実行します。
+パブリックアクセスを無効にしたため、VNet内から接続する必要があります。
+**本番方針（SHIRに SQL クライアントツールを入れない）に合わせ、SSMS/sqlcmd は使いません。**
+`vm-shir` の PowerShell から、Windows 標準の .NET Framework に含まれる
+`System.Data.SqlClient`（追加インストール不要）を直接呼び出して実行します。
 
+**事前確認：`System.Data.SqlClient` が利用できるか**
+
+```powershell
+try {
+    $conn = New-Object System.Data.SqlClient.SqlConnection
+    Write-Host "OK: System.Data.SqlClient は利用可能です（.NET Framework $([System.Environment]::Version)）"
+} catch {
+    Write-Host "NG: System.Data.SqlClient が見つかりません - $_"
+}
+```
+
+> Windows Server 2016 以降なら .NET Framework 4.6 以上が標準搭載されており、通常はこれで確実に存在します。
+> バージョンを直接確認したい場合は次を実行します（`461808` 以上なら .NET Framework 4.7.2 以上）。
+>
+> ```powershell
+> Get-ItemPropertyValue "HKLM:\SOFTWARE\Microsoft\NET Framework Setup\NDP\v4\Full" -Name Release
+> ```
+>
 > Serverless（STEP 5-1）は作成直後・アイドル後は一時停止状態のため、
 > 最初の接続で自動再開が走り数十秒〜1分ほど待たされることがあります。
 > タイムアウトした場合は再接続すれば通常つながります。
 
-```sql
--- master で実行
+```powershell
+$connStr = "Server=tcp:（論理サーバー名）.database.windows.net,1433;Database=master;User ID=sqladminuser;Password=（強いパスワード）;Encrypt=True;TrustServerCertificate=False;Connection Timeout=60;"
+
+> `dmsuser`に必要な権限は **3階層**あります。1つでも欠けるとDMSの各フェーズ（登録テスト／
+> スキーマ移行／データ移行）のどこかで失敗するため、まとめて設定します。
+>
+> | 階層 | 必要な権限 | 目的 |
+> |---|---|---|
+> | サーバーレベル | `##MS_DefinitionReader##` `##MS_DatabaseConnector##` `##MS_DatabaseManager##` `##MS_LoginManager##` | ノード登録・`master`接続・カタログ参照 |
+> | `master`データベース内 | `dbmanager` `loginmanager`ロール | DB作成・ログイン管理（公式サンプルスクリプト通り） |
+> | **ターゲットDB（`TestDB1`）内** | **`db_owner`** | スキーマ/データのデプロイ実行 |
+>
+> ⚠️ 3つ目（ターゲットDBでの`db_owner`）が漏れやすい理由：公式ドキュメントのサンプルスクリプトは
+> 「DMS自身がターゲットDBを新規作成する」前提のため、`##MS_DatabaseManager##`メンバーが自動的に
+> 作成したDBの所有者(dbo)になり、明示的な`db_owner`付与が書かれていません。しかし本手順のように
+> **`TestDB1`をSTEP 5-1で事前に作成している場合**、`dmsuser`が作ったDBではないため自動付与されず、
+> 明示的に`ALTER ROLE db_owner ADD MEMBER`が必要になります。
+
+**① `master`データベースに対して実行**（`Database=master`のまま）
+
+```powershell
+$sql = @"
 CREATE LOGIN dmsuser WITH PASSWORD = '（強いパスワード）';
-ALTER SERVER ROLE ##MS_DatabaseManager##  ADD MEMBER [dmsuser];
-ALTER SERVER ROLE ##MS_LoginManager##     ADD MEMBER [dmsuser];
-GO
+ALTER SERVER ROLE ##MS_DefinitionReader##  ADD MEMBER [dmsuser];
+ALTER SERVER ROLE ##MS_DatabaseConnector## ADD MEMBER [dmsuser];
+ALTER SERVER ROLE ##MS_DatabaseManager##   ADD MEMBER [dmsuser];
+ALTER SERVER ROLE ##MS_LoginManager##      ADD MEMBER [dmsuser];
+IF NOT EXISTS (SELECT * FROM sys.database_principals WHERE name = 'dmsuser')
+    CREATE USER dmsuser FOR LOGIN dmsuser;
+IF IS_ROLEMEMBER('dbmanager', 'dmsuser') = 0
+    EXEC sp_addrolemember 'dbmanager', 'dmsuser';
+IF IS_ROLEMEMBER('loginmanager', 'dmsuser') = 0
+    EXEC sp_addrolemember 'loginmanager', 'dmsuser';
+"@
+
+$conn = New-Object System.Data.SqlClient.SqlConnection($connStr)
+$conn.Open()
+$cmd = $conn.CreateCommand()
+$cmd.CommandText = $sql
+$cmd.ExecuteNonQuery()
+$conn.Close()
 ```
+
+> `CREATE LOGIN`が既に存在する場合はエラーになるので、初回以降の再実行時はその行を削除してください。
+> `IF NOT EXISTS`/`IS_ROLEMEMBER`のガードを付けているため、②以降の行は何度再実行しても安全です。
+
+**② ターゲットDB（`TestDB1`）に対して実行**（`$connStr`の`Database=master`を`Database=TestDB1`に変更）
+
+```powershell
+$connStr = "Server=tcp:（論理サーバー名）.database.windows.net,1433;Database=TestDB1;User ID=sqladminuser;Password=（強いパスワード）;Encrypt=True;TrustServerCertificate=False;Connection Timeout=60;"
+
+$sql = @"
+IF NOT EXISTS (SELECT * FROM sys.database_principals WHERE name = 'dmsuser')
+    CREATE USER dmsuser FOR LOGIN dmsuser;
+ALTER ROLE db_owner ADD MEMBER dmsuser;
+"@
+
+$conn = New-Object System.Data.SqlClient.SqlConnection($connStr)
+$conn.Open()
+$cmd = $conn.CreateCommand()
+$cmd.CommandText = $sql
+$cmd.ExecuteNonQuery()
+$conn.Close()
+```
+
+> 接続に失敗する場合、Serverless の自動再開待ちの可能性があるので数十秒〜1分後に再実行してください。
+> `sqladminuser` は STEP 5-1 で作成した論理サーバーの管理者アカウントです。
+>
+> **戻り値 `-1` について**：`ExecuteNonQuery()` は影響を受けた行数を返しますが、
+> DDL 文は行を返さないため `-1` が正常な結果です。エラーではありません。
+
+作成できたか確認する場合は、以下を実行します。
+
+```powershell
+$conn = New-Object System.Data.SqlClient.SqlConnection($connStr)
+$conn.Open()
+$cmd = $conn.CreateCommand()
+$cmd.CommandText = "SELECT name FROM sys.sql_logins WHERE name = 'dmsuser'"
+$reader = $cmd.ExecuteReader()
+while ($reader.Read()) { Write-Host $reader["name"] }
+$conn.Close()
+```
+
+`dmsuser` が表示されれば作成済みです。
 
 ---
 
@@ -439,13 +581,15 @@ az provider register --namespace Microsoft.DataMigration
 1. 「Azure Database Migration Service」→「作成」
 2. 設定値：
 
-| 項目 | 設定値 |
-|---|---|
-| リソースグループ | `rg-dms-network-verify` |
-| 移行サービス名 | 任意 |
-| リージョン | Japan East |
-| サービスモード | Azure |
-| 価格レベル | Standard |
+| 項目 | 必須/任意 | 検証での設定値 | 本番での考慮点 |
+|---|---|---|---|
+| サブスクリプション | 必須 | 検証用サブスクリプション | 本番用サブスクリプションを選択（検証と分けるのが一般的） |
+| リソースグループ | 必須 | `rg-dms-network-verify` | 移行完了後にDMSインスタンス自体は不要になるため、削除しやすいよう専用のRGに分けておくと後片付けが楽 |
+| 移行サービス名 | 必須（一意な名前） | 任意（例：`dms-verify`） | 命名規則に従う。他の値と違い変更不可なので付け直しは再作成が必要 |
+| リージョン | 必須 | Japan East | **移行先の Azure SQL Database と同じリージョンを推奨**（DMSのコントロールプレーンとターゲット間の通信レイテンシを避けるため） |
+
+> ソース：SQL Server／ターゲット：Azure SQL Database（オフライン）を選ぶ現行のポータル画面では、
+> サービスモードや価格レベル（SKU）の選択項目自体が表示されません（無料・固定構成）。
 
 ---
 
@@ -476,7 +620,29 @@ Invoke-WebRequest `
 
 ### 7-2 プロキシ設定
 
-`C:\Program Files\Microsoft Integration Runtime\5.0\Shared\diahost.exe.config` を編集：
+> ⚠️ **`diahost.exe.config` と `diawp.exe.config` の両方を編集する必要があります。**
+> 公式ドキュメントも「両方を忘れずに更新してください」と明記しています。
+> 片方だけだと、プロセスによってはプロキシ未設定＝直結を試みてしまい、
+> NSGの`deny-internet`で失敗する原因になります。
+>
+> **2つのファイルの役割**
+>
+> | ファイル | 対応プロセス | 役割 |
+> |---|---|---|
+> | `diahost.exe.config` | `diahost.exe`（Windowsサービス `DIAHostService` の実体） | ノード登録・Azure Relayとの制御チャネル維持・ハートビート/状態報告 |
+> | `diawp.exe.config` | `diawp.exe`（Worker Process） | `diahost`から起動され、実際のコピー処理（移行タスクの実行・対話型オーサリングの接続テスト等）を実行 |
+>
+> **片方だけ設定した場合の症状の違い**
+>
+> - `diahost.exe.config`だけ設定 → **登録自体は成功する**が、実際にタスクを実行するワーカープロセスが直結を試みて失敗。「登録済み・実行中に見えるのに移行やテスト接続だけ失敗/ハングする」という切り分けにくい形で出やすい
+> - `diawp.exe.config`だけ設定 → **登録自体が失敗する**。後述のトラブルシューティングにある「Disconnected/Connecting状態が続く」「Unable to connect to the remote server」に該当し、比較的すぐ気づける
+>
+> つまり `diawp.exe.config` の設定漏れの方が発見しづらいため、両方揃えて編集することが重要です。
+
+以下の2ファイルを**両方とも**同じ内容で編集します。
+
+- `C:\Program Files\Microsoft Integration Runtime\5.0\Shared\diahost.exe.config`
+- `C:\Program Files\Microsoft Integration Runtime\5.0\Shared\diawp.exe.config`
 
 ```xml
 <system.net>
@@ -489,6 +655,15 @@ Invoke-WebRequest `
   </defaultProxy>
 </system.net>
 ```
+
+> **移行元SQL Server（1433）やPE（1433）への通信にバイパス指定は不要**
+> `<defaultProxy>`はHTTP(S)通信（`HttpWebRequest`/`HttpClient`系）にしか効かず、
+> SQL Serverへの接続（`SqlClient`によるTDSプロトコル）は生のTCPソケット接続のため、
+> **この設定を最初から一切参照しません**。実際、.NETの`SqlClient`にはHTTPプロキシ経由でSQL接続する機能自体が存在せず、
+> [dotnet/SqlClientのIssue #315](https://github.com/dotnet/SqlClient/issues/315)でも未実装の機能要望として上がっている状態です。
+> `bypassonlocal="true"`は「ドットを含まない単純なホスト名やループバック」が対象で、`10.0.2.4`や`10.0.3.x`のような
+> IPアドレス宛の通信とは無関係です。1433の通信がプロキシを介さず届くのは、バイパス設定によるものではなく、
+> NSGの`allow-vnet`ルール（VNet内は全ポート許可）による直接到達性によるものです。
 
 編集後、サービスを再起動します。
 
@@ -511,6 +686,16 @@ Restart-Service DIAHostService
 3. キーを貼り付けて「登録」
 4. 状態が「実行中」になることを確認
 
+> **「イントラネットからのリモートアクセスを有効にする」チェックボックスについて**
+> **チェックしない（無効のまま）で進めます。** これは同じネットワーク内の別マシンから
+> `New-AzDataFactoryV2LinkedServiceEncryptedCredential` で資格情報をリモートプッシュしたり、
+> 複数ノードでの高可用性（HA）クラスタを組む際に使う機能で、有効にするとローカルにポート8060
+> （既定）で待ち受けを開始します（＝インバウンド関連の話で、これまでのプロキシ/NSGの
+> アウトバウンド制御とは無関係）。
+>
+> 今回は単一ノード・資格情報はSTEP 8-4のDMS移行プロジェクト作成ウィザードで直接入力する方式のため不要です。
+> なおSHIRセットアップ v3.3以降はインストーラーの既定でこの機能は無効化されています。
+
 ### 8-2 サービス URL の確認
 
 1. 同 Configuration Manager の「診断」タブ →「接続のテスト」を実行
@@ -523,18 +708,19 @@ Restart-Service DIAHostService
 ```powershell
 # DNS解決の確認（期待値: 10.0.3.x が返ること）
 nslookup （論理サーバー名）.database.windows.net
+nslookup 10.0.2.4  # 移行元SQL Server（名前解決不要ならスキップ可）
 
 # ポート疎通の確認
 Test-NetConnection （論理サーバー名）.database.windows.net -Port 1433
+Test-NetConnection 10.0.2.4 -Port 1433
 ```
 
-```cmd
-REM SQL接続の確認
-sqlcmd -S （論理サーバー名）.database.windows.net -U dmsuser -P （パスワード） -Q "SELECT @@VERSION"
-
-REM 移行元SQL Serverへの疎通も確認
-sqlcmd -S 10.0.2.4 -U migrateuser -P （パスワード） -Q "SELECT @@VERSION"
-```
+> **本番の SHIR には SQL クライアントツール（sqlcmd / SSMS）を入れない前提**のため、
+> ここでは DNS 解決とポート疎通（ネットワーク層）までを `vm-shir` から確認します。
+> **SQL 認証が実際に通るか**（ユーザー名・パスワードでログインできるか）は、
+> STEP 8-4 で DMS の移行プロジェクト作成ウィザードにソース/ターゲットの接続情報を入力した際に、
+> DMS が SHIR 経由で内部的に検証します。ここで失敗する場合、
+> 本 STEP でネットワーク層（DNS・ポート）が OK であれば、原因は認証情報側に絞り込めます。
 
 ### 8-4 移行を最後まで実行する
 
@@ -543,7 +729,18 @@ sqlcmd -S 10.0.2.4 -U migrateuser -P （パスワード） -Q "SELECT @@VERSION"
 3. ターゲット：`（論理サーバー名）.database.windows.net`／`dmsuser`
 4. `TestDB1` を選択してマッピング
 5. スキーマ移行 ✅ ／ データ移行 ✅
+   - 「不足しているスキーマの移行」のオブジェクト種別一覧が表示されたら、**「Users」「Roles」のチェックを外す**
+     （外さないと、ソース側専用の`migrateuser`をターゲットにも複製しようとして下記のようなエラーになる。
+     データ移行自体は成功するため実害はないが、ログが汚れるため最初から対象外にしておくのが無難）
 6. 「移行の開始」
+
+```text
+Deployed failure: Cannot alter the role 'db_datareader', because it does not exist
+or you do not have permission. Object element: [db_datareader] ADD MEMBER [migrateuser].
+
+Deployed failure: Cannot find the user 'dbo', because it does not exist or you do
+not have permission. Object element: [migrateuser].
+```
 
 ```sql
 -- 移行先の Azure SQL Database で実行（3 件返れば成功）
@@ -562,6 +759,35 @@ sudo awk '{print $7}' /var/log/squid/access.log | cut -d: -f1 | sort -u
 > これが **「DMS のオフライン移行に実際に必要な FQDN の一覧」** です。
 > STEP 11 の記録シートに書き写してください。
 > （任意）本番のADF許可リストを入手済みなら、ここで突き合わせて過不足を確認できます。
+>
+> ⚠️ **`error`という行が出たら、それはFQDNではなくログのパース artifact です。**
+> `Test-NetConnection`のようにTCP接続だけしてHTTPリクエストを送らない通信は、
+> Squidのログに`error:transaction-end-before-headers`のような形で記録されます。
+> これを`cut -d: -f1`で切ると`error`だけが残ってしまうため、リストからは除外してください。
+>
+> また `download.microsoft.com` はSHIRのMSIダウンロード・自動更新用で、**移行の実行自体には不要**です
+> （運用上は許可推奨ですが、フェーズ2で「移行に必須か」だけを見るなら除外して試すこともできます）。
+
+### 公式のSHIRネットワーク要件との差分
+
+実測結果を、[公式のセルフホステッドIRネットワーク要件](https://learn.microsoft.com/ja-jp/azure/data-factory/create-self-hosted-integration-runtime#ports-and-firewalls)と突き合わせた結果、**追加で必要なFQDNはありませんでした**（公式の一般的な要件表の範囲内）。
+
+| 公式の要件（企業ファイアウォールレベル） | 本検証の実測結果 | 判定 |
+|---|---|---|
+| `*.servicebus.windows.net`（443） | 実測あり（複数の`g0`〜`g14`系ノード） | ✅ 一致 |
+| `*.frontend.clouddatahub.net`（443） | 実測あり | ✅ 一致 |
+| `download.microsoft.com`（443、自動更新無効なら不要） | 実測あり（SHIRインストール時） | ✅ 一致 |
+| キーボールトURL（443、Key Vault使用時のみ） | 未使用（資格情報はローカル保存方式） | ✅ 該当なし |
+| `*.core.windows.net`（443、ステージングコピー使用時） | 未使用 | ✅ 該当なし |
+| `*.database.windows.net`（1433、SQL DB/Synapseとの間でコピーする場合） | Squidログには**現れない** | ⚠️ 下記参照 |
+
+> **唯一の注意点：`*.database.windows.net:1433`はプロキシの話ではありません。**
+> SQL Server接続（`SqlClient`のTDSプロトコル）は`<defaultProxy>`を経由しないため、
+> Squidのログには一切記録されません（前述の通り）。公式要件表では他のFQDNと同列に
+> 記載されていますが、実態は「プロキシの許可リストに入れるもの」ではなく
+> 「**プロキシとは別に、NSG/ExpressRoute/ファイアウォールで直接到達性を確保すべきもの**」です。
+> 本番申請時は、443系（プロキシの許可リスト）と`*.database.windows.net:1433`
+> （ファイアウォール/ルーティング側の直接許可）を分けて依頼する必要があります。
 
 ---
 
@@ -575,11 +801,10 @@ http_port 3128
 
 acl shir_net src 10.0.1.0/24
 
-# ▼▼▼ STEP 8-5 で確定した FQDN をここに列挙する（例） ▼▼▼
+# ▼▼▼ STEP 8-5 で確定した FQDN（本検証ではワイルドカードで許可） ▼▼▼
 acl dms_required dstdomain .servicebus.windows.net
 acl dms_required dstdomain .frontend.clouddatahub.net
-acl dms_required dstdomain login.microsoftonline.com
-# 実際に確定したリストに置き換えること
+# `error`（ログのパースartifact）は除外。download.microsoft.comは運用上許可推奨（任意）
 # ▲▲▲
 
 acl SSL_ports port 443
@@ -653,6 +878,45 @@ sudo grep TCP_DENIED /var/log/squid/access.log
 > （初回のみ発生する証明書検証や、時間経過後にだけ発生する通信など）。
 > フェーズ2で拒否が出ても異常ではなく、**それこそがフェーズ2を行う意味**です。
 > 出なくなるまで追加→再実行を繰り返し、最終的なリストを確定させてください。
+
+---
+
+## STEP 10.5｜証跡（ログ）の持ち出し
+
+Bastion Developer SKU はファイル転送に対応していないため、`.evtx`や`.log`ファイルをそのまま
+ダウンロードすることはできません。**テキストのコピー＆ペースト**（Bastionの全SKUで既定有効）を使って、
+必要な内容をテキストとして抜き出します。
+
+### vm-shir のイベントビューアーログ
+
+`vm-shir` の PowerShell で実行し、出力されたテキストを選択して `Ctrl+C` → ローカル側で `Ctrl+V` します。
+
+```powershell
+Get-WinEvent -LogName "Microsoft Integration Runtime/Admin" -MaxEvents 50 |
+    Format-List TimeCreated, LevelDisplayName, Message |
+    Out-String
+```
+
+> エラーだけに絞りたい場合は `Where-Object {$_.LevelDisplayName -eq "Error"}` を挟みます。
+
+### vm-proxy の Squid ログ
+
+`vm-proxy` の Bastion SSH セッションで実行します。
+
+```bash
+# 記録シート（STEP 11）用：確定したFQDN一覧だけを抜き出す（STEP 8-5と同じコマンド）
+sudo awk '{print $7}' /var/log/squid/access.log | cut -d: -f1 | sort -u
+
+# 生ログそのものを見たい場合
+cat /var/log/squid/access.log
+```
+
+表示されたテキストを選択して `Ctrl+C` → ローカル側で `Ctrl+V` します。
+ブラウザがClipboard API非対応の場合は、Bastionセッション画面の `>>`（二重矢印アイコン）から
+クリップボードパレットを開いて操作してください。
+
+> ログが長くて画面に収まらない場合は、`sudo tail -n 200 /var/log/squid/access.log` のように
+> 件数を絞ってから同様にコピーしてください。
 
 ---
 
