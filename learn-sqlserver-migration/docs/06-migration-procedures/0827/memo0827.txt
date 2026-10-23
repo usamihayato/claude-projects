@@ -1,0 +1,864 @@
+az vm create   --resource-group $RG   --name vm-source-sql   --image MicrosoftSQLServer:sql2019-ws2022:sqldev-gen2:latest   --size Standard_B2s   --vnet-name $VNET   --subnet snet-source   --admin-username azureuser   --admin-password 'P@ssw0rd0827'   --public-ip-address ""
+
+---------------------------------------------------------------------------------
+
+CREATE DATABASE TestDB1;
+GO
+USE TestDB1;
+CREATE TABLE dbo.T1 (id INT IDENTITY PRIMARY KEY, val NVARCHAR(100));
+INSERT INTO dbo.T1 (val) VALUES ('test1'), ('test2'), ('test3');
+GO
+
+
+-- 混合モード（SQL + Windows認証）を有効化（既定では Windows 認証のみ）
+USE [master];
+EXEC xp_instance_regwrite N'HKEY_LOCAL_MACHINE', N'Software\Microsoft\MSSQLServer\MSSQLServer', N'LoginMode', REG_DWORD, 2;
+GO
+
+SELECT SERVERPROPERTY('IsIntegratedSecurityOnly');
+
+CREATE LOGIN migrateuser WITH PASSWORD = 'P@ssw0rd0827';
+USE TestDB1;
+CREATE USER migrateuser FOR LOGIN migrateuser;
+ALTER ROLE db_datareader ADD MEMBER migrateuser;
+GO
+
+-- DMS の公式最小要件：db_datareader に加えて VIEW ANY DEFINITION（サーバー権限）が必要
+-- （参考: https://learn.microsoft.com/ja-jp/data-migration/sql-server/database/database-migration-service）
+GRANT VIEW ANY DEFINITION TO migrateuser;
+GO
+
+---------------------------------------------------------------------------------
+
+>> Test-NetConnection login.microsoftonline.com -Port 443                                                               >>                                                                                                                      >> # プロキシには到達できること（成功すれば OK）
+>> Test-NetConnection 10.0.4.4 -Port 3128
+>>
+WARNING: TCP connect to (20.190.141.38 : 443) failed
+WARNING: TCP connect to (20.190.141.37 : 443) failed
+PS C:\Users\azureuser> # プロキシには到達できること（成功すれば OK）
+>> Test-NetConnection 10.0.4.4 -Port 3128
+
+
+ComputerName     : 10.0.4.4
+RemoteAddress    : 10.0.4.4
+RemotePort       : 3128
+InterfaceAlias   : Ethernet
+SourceAddress    : 10.0.1.4
+TcpTestSucceeded : True
+
+
+
+PS C:\Users\azureuser>
+PS C:\Users\azureuser> $connStr = "Server=tcp:sqlsv-verify-25487.database.windows.net,1433;Database=master;User ID=sqladminuser;Password=P@ssw0rd0827;Encrypt=True;TrustServerCertificate=False;Connection Timeout=60;"
+>>
+>> $sql = @"
+>> CREATE LOGIN dmsuser WITH PASSWORD = 'P@ssw0rd0827';
+>> ALTER SERVER ROLE ##MS_DatabaseManager##  ADD MEMBER [dmsuser];
+>> ALTER SERVER ROLE ##MS_LoginManager##     ADD MEMBER [dmsuser];
+>> "@
+>>
+>> $conn = New-Object System.Data.SqlClient.SqlConnection($connStr)
+>> $conn.Open()
+>> $cmd = $conn.CreateCommand()
+>> $cmd.CommandText = $sql
+>> $cmd.ExecuteNonQuery()
+>> $conn.Close()
+>>
+-1
+PS C:\Users\azureuser> $connStr = "Server=tcp:sqlsv-verify-25487.database.windows.net,1433;Database=master;User ID=sqladminuser;Password=P@ssw0rd0827;Encrypt=True;TrustServerCertificate=False;Connection Timeout=60;"
+>> $conn = New-Object System.Data.SqlClient.SqlConnection($connStr)
+>> $conn.Open()
+>> $cmd = $conn.CreateCommand()
+>> $cmd.CommandText = "SELECT name FROM sys.sql_logins WHERE name = 'dmsuser'"
+>> $reader = $cmd.ExecuteReader()
+>> while ($reader.Read()) { Write-Host $reader["name"] }
+>> $conn.Close()
+>>
+dmsuser
+PS C:\Users\azureuser>
+
+
+-------------------------------------------
+<?xml version="1.0" encoding="utf-8"?>
+<configuration>
+  <configSections>
+    <section name="TransferRuntime" type="Microsoft.DataTransfer.ClientLibrary.TransferRuntimeConfigurationSection, Microsoft.DataTransfer.ClientLibrary" />
+    <section name="SourceDataSourceMappingSection" type="System.Configuration.NameValueSectionHandler" />
+    <section name="DestinationDataSourceMappingSection" type="System.Configuration.NameValueSectionHandler" />
+  </configSections>
+  <TransferRuntime>
+    <Factories />
+  </TransferRuntime>
+  <startup>
+    <supportedRuntime version="v4.0" sku=".NETFramework,Version=v4.7.2" />
+  </startup>
+  <system.data>
+    <DbProviderFactories>
+      <remove invariant="System.Data.SqlServerCe.4.0" />
+      <add name="Microsoft SQL Server Compact Data Provider 4.0" invariant="System.Data.SqlServerCe.4.0" description=".NET Framework Data Provider for Microsoft SQL Server Compact" type="System.Data.SqlServerCe.SqlCeProviderFactory, System.Data.SqlServerCe, Version=4.0.0.0, Culture=neutral, PublicKeyToken=89845dcd8080cc91" />
+      <add name="R" invariant="R.Provider" description="R" type="Microsoft.PowerBI.Radio.RProviderFactory, Microsoft.PowerBI.Radio" />
+    </DbProviderFactories>
+  </system.data>
+  <system.net>
+    <defaultProxy enabled="true" useDefaultCredentials="false">
+      <proxy
+        usesystemdefault="false"
+        proxyaddress="http://10.0.4.4:3128"
+        bypassonlocal="true"
+      />
+    </defaultProxy>
+  </system.net>
+  <appSettings>
+    <add key="ConfigurationFilePath" value="DataSourceMigrationConfiguration.xml" />
+  </appSettings>
+  <SourceDataSourceMappingSection>
+    <add key="SQL" value="PlatformLibrary.API.Source.SqlSourceDataSource, PlatformLibrary" />
+    <add key="AzureDB" value="PlatformLibrary.API.Source.AzureDBSourceDataSource, PlatformLibrary" />
+  </SourceDataSourceMappingSection>
+  <DestinationDataSourceMappingSection>
+    <add key="SQLDW" value="PlatformLibrary.API.Destination.SQLDWDestinationDataSource, PlatformLibrary" />
+  </DestinationDataSourceMappingSection>
+  <runtime>
+    <assemblyBinding xmlns="urn:schemas-microsoft-com:asm.v1">
+      <dependentAssembly>
+        <assemblyIdentity name="Microsoft.Spatial" publicKeyToken="31bf3856ad364e35" culture="neutral" />
+        <bindingRedirect oldVersion="0.0.0.0-7.6.0.30605" newVersion="7.6.0.30605" />
+      </dependentAssembly>
+      <dependentAssembly>
+        <assemblyIdentity name="Newtonsoft.Json" publicKeyToken="30AD4FE6B2A6AEED" culture="neutral" />
+        <bindingRedirect oldVersion="0.0.0.0-13.0.0.0" newVersion="13.0.0.0" />
+      </dependentAssembly>
+      <dependentAssembly>
+        <assemblyIdentity name="System.Net.Http.Formatting" publicKeyToken="31bf3856ad364e35" culture="neutral" />
+        <bindingRedirect oldVersion="0.0.0.0-5.2.7.0" newVersion="5.2.7.0" />
+      </dependentAssembly>
+      <dependentAssembly>
+        <assemblyIdentity name="System.Web.Http" publicKeyToken="31bf3856ad364e35" culture="neutral" />
+        <bindingRedirect oldVersion="0.0.0.0-5.2.7.0" newVersion="5.2.7.0" />
+      </dependentAssembly>
+      <dependentAssembly>
+        <assemblyIdentity name="Microsoft.WindowsAzure.Storage" publicKeyToken="31bf3856ad364e35" culture="neutral" />
+        <bindingRedirect oldVersion="0.0.0.0-9.3.2.0" newVersion="9.3.2.0" />
+      </dependentAssembly>
+      <dependentAssembly>
+        <assemblyIdentity name="PlatformLibrary" culture="neutral" publicKeyToken="31bf3856ad364e35" />
+        <bindingRedirect oldVersion="1.1.6156.1-1.1.6198.1" newVersion="1.1.6198.1" />
+      </dependentAssembly>
+      <dependentAssembly>
+        <assemblyIdentity name="DataSourceMigrationEngine.Service" culture="neutral" publicKeyToken="31bf3856ad364e35" />
+        <bindingRedirect oldVersion="1.1.6156.1-1.1.6198.1" newVersion="1.1.6198.1" />
+      </dependentAssembly>
+      <dependentAssembly>
+        <assemblyIdentity name="Microsoft.Rest.ClientRuntime" publicKeyToken="31bf3856ad364e35" culture="neutral" />
+        <bindingRedirect oldVersion="0.0.0.0-3.0.0.0" newVersion="2.0.0.0" />
+      </dependentAssembly>
+      <dependentAssembly>
+        <assemblyIdentity name="MongoDB.Bson" publicKeyToken="15b1115599983c50" culture="neutral" />
+        <bindingRedirect oldVersion="0.0.0.0-2.13.2.0" newVersion="2.10.4.0" />
+        <codeBase version="2.4.4.0" href="MongoDB.2.4.4\MongoDB.Bson.dll" />
+        <codeBase version="2.10.4.0" href="MongoDB.2.10.4\MongoDB.Bson.dll" />
+      </dependentAssembly>
+      <dependentAssembly>
+        <assemblyIdentity name="MongoDB.Driver" publicKeyToken="15b1115599983c50" culture="neutral" />
+        <bindingRedirect oldVersion="0.0.0.0-2.13.2.0" newVersion="2.10.4.0" />
+        <codeBase version="2.4.4.0" href="MongoDB.2.4.4\MongoDB.Driver.dll" />
+        <codeBase version="2.10.4.0" href="MongoDB.2.10.4\MongoDB.Driver.dll" />
+      </dependentAssembly>
+      <dependentAssembly>
+        <assemblyIdentity name="MongoDB.Driver.Core" publicKeyToken="15b1115599983c50" culture="neutral" />
+        <bindingRedirect oldVersion="0.0.0.0-2.13.2.0" newVersion="2.10.4.0" />
+        <codeBase version="2.4.4.0" href="MongoDB.2.4.4\MongoDB.Driver.Core.dll" />
+        <codeBase version="2.10.4.0" href="MongoDB.2.10.4\MongoDB.Driver.Core.dll" />
+      </dependentAssembly>
+      <dependentAssembly>
+        <assemblyIdentity name="System.Text.Encodings.Web" publicKeyToken="cc7b13ffcd2ddd51" culture="neutral" />
+        <bindingRedirect oldVersion="0.0.0.0-8.0.0.0" newVersion="8.0.0.0" />
+      </dependentAssembly>
+      <dependentAssembly>
+        <assemblyIdentity name="Azure.Core" publicKeyToken="92742159e12e44c8" culture="neutral" />
+        <bindingRedirect oldVersion="0.0.0.0-1.47.3.0" newVersion="1.47.3.0" />
+      </dependentAssembly>
+      <dependentAssembly>
+        <assemblyIdentity name="System.Collections.Immutable" publicKeyToken="b03f5f7f11d50a3a" culture="neutral" />
+        <bindingRedirect oldVersion="0.0.0.0-7.0.0.0" newVersion="1.2.1.0" />
+      </dependentAssembly>
+      <dependentAssembly>
+        <assemblyIdentity name="System.IdentityModel.Tokens.Jwt" publicKeyToken="31bf3856ad364e35" culture="neutral" />
+        <bindingRedirect oldVersion="0.0.0.0-7.6.2.0" newVersion="7.6.2.0" />
+      </dependentAssembly>
+      <dependentAssembly>
+        <assemblyIdentity name="Microsoft.IdentityModel.Tokens" publicKeyToken="31bf3856ad364e35" culture="neutral" />
+        <bindingRedirect oldVersion="0.0.0.0-7.6.2.0" newVersion="7.6.2.0" />
+      </dependentAssembly>
+      <dependentAssembly>
+        <assemblyIdentity name="Microsoft.IdentityModel.Logging" publicKeyToken="31bf3856ad364e35" culture="neutral" />
+        <bindingRedirect oldVersion="0.0.0.0-7.6.2.0" newVersion="7.6.2.0" />
+      </dependentAssembly>
+      <dependentAssembly>
+        <assemblyIdentity name="Microsoft.IdentityModel.JsonWebTokens" publicKeyToken="31bf3856ad364e35" culture="neutral" />
+        <bindingRedirect oldVersion="0.0.0.0-7.6.2.0" newVersion="7.6.2.0" />
+      </dependentAssembly>
+      <dependentAssembly>
+        <assemblyIdentity name="Microsoft.Cloud.InstrumentationFramework.Events" publicKeyToken="31bf3856ad364e35" culture="neutral" />
+        <bindingRedirect oldVersion="0.0.0.0-3.5.1.1" newVersion="3.5.1.1" />
+      </dependentAssembly>
+      <dependentAssembly>
+        <assemblyIdentity name="Microsoft.Cloud.InstrumentationFramework.Metrics" publicKeyToken="31bf3856ad364e35" culture="neutral" />
+        <bindingRedirect oldVersion="0.0.0.0-3.5.1.1" newVersion="3.5.1.1" />
+      </dependentAssembly>
+      <dependentAssembly>
+        <assemblyIdentity name="System.Buffers" publicKeyToken="cc7b13ffcd2ddd51" culture="neutral" />
+        <bindingRedirect oldVersion="0.0.0.0-4.0.3.0" newVersion="4.0.3.0" />
+      </dependentAssembly>
+      <dependentAssembly>
+        <assemblyIdentity name="BouncyCastle.Crypto" publicKeyToken="0e99375e54769942" culture="neutral" />
+        <bindingRedirect oldVersion="0.0.0.0-1.8.10.0" newVersion="1.8.10.0" />
+      </dependentAssembly>
+      <dependentAssembly>
+        <assemblyIdentity name="System.Text.Json" publicKeyToken="cc7b13ffcd2ddd51" culture="neutral" />
+        <bindingRedirect oldVersion="0.0.0.0-8.0.0.6" newVersion="8.0.0.6" />
+      </dependentAssembly>
+      <dependentAssembly>
+        <assemblyIdentity name="System.Diagnostics.DiagnosticSource" publicKeyToken="cc7b13ffcd2ddd51" culture="neutral" />
+        <bindingRedirect oldVersion="0.0.0.0-9.0.0.0" newVersion="9.0.0.0" />
+      </dependentAssembly>
+      <dependentAssembly>
+        <assemblyIdentity name="Microsoft.Azure.KeyVault" publicKeyToken="31bf3856ad364e35" culture="neutral" />
+        <bindingRedirect oldVersion="0.0.0.0-3.0.5.0" newVersion="3.0.5.0" />
+      </dependentAssembly>
+      <dependentAssembly>
+        <assemblyIdentity name="Microsoft.Azure.KeyVault.WebKey" publicKeyToken="31bf3856ad364e35" culture="neutral" />
+        <bindingRedirect oldVersion="0.0.0.0-3.0.5.0" newVersion="3.0.5.0" />
+      </dependentAssembly>
+      <dependentAssembly>
+        <assemblyIdentity name="Microsoft.Bcl.AsyncInterfaces" publicKeyToken="cc7b13ffcd2ddd51" culture="neutral" />
+        <bindingRedirect oldVersion="0.0.0.0-9.0.0.7" newVersion="9.0.0.7" />
+      </dependentAssembly>
+      <dependentAssembly>
+        <assemblyIdentity name="Microsoft.Azure.Storage.Common" publicKeyToken="31bf3856ad364e35" culture="neutral" />
+        <bindingRedirect oldVersion="0.0.0.0-11.1.7.0" newVersion="11.1.7.0" />
+      </dependentAssembly>
+      <dependentAssembly>
+        <assemblyIdentity name="Microsoft.OData.Core" publicKeyToken="31bf3856ad364e35" culture="neutral" />
+        <bindingRedirect oldVersion="0.0.0.0-7.5.0.20627" newVersion="6.15.0.0" />
+      </dependentAssembly>
+      <dependentAssembly>
+        <assemblyIdentity name="Microsoft.OData.Edm" publicKeyToken="31bf3856ad364e35" culture="neutral" />
+        <bindingRedirect oldVersion="0.0.0.0-7.5.0.20627" newVersion="6.15.0.0" />
+      </dependentAssembly>
+      <dependentAssembly>
+        <assemblyIdentity name="MySqlConnector" publicKeyToken="d33d3e53aa5f8c92" culture="neutral" />
+        <bindingRedirect oldVersion="0.0.0.0-2.0.0.0" newVersion="2.0.0.0" />
+        <codeBase version="0.55.0.0" href="MySqlConnector.dll" />
+        <codeBase version="2.0.0.0" href="MySqlConnector.2.3.7\MySqlConnector.dll" />
+      </dependentAssembly>
+      <dependentAssembly>
+        <assemblyIdentity name="Microsoft.Extensions.Logging.Abstractions" publicKeyToken="adb9793829ddae60" culture="neutral" />
+        <bindingRedirect oldVersion="0.0.0.0-9.0.0.0" newVersion="9.0.0.0" />
+      </dependentAssembly>
+      <dependentAssembly>
+        <assemblyIdentity name="Kusto.Data" publicKeyToken="829a00acde12d551" culture="neutral" />
+        <bindingRedirect oldVersion="0.0.0.0-12.1.0.0" newVersion="11.3.5.0" />
+      </dependentAssembly>
+      <dependentAssembly>
+        <assemblyIdentity name="System.Threading.Tasks.Extensions" publicKeyToken="cc7b13ffcd2ddd51" culture="neutral" />
+        <bindingRedirect oldVersion="0.0.0.0-4.2.1.0" newVersion="4.2.0.1" />
+      </dependentAssembly>
+    </assemblyBinding>
+    <assemblyBinding xmlns="urn:schemas-microsoft-com:asm.v1">
+      <dependentAssembly>
+        <assemblyIdentity name="Microsoft.WindowsAzure.Configuration" publicKeyToken="31bf3856ad364e35" culture="neutral" />
+        <bindingRedirect oldVersion="0.0.0.0-3.0.0.0" newVersion="3.0.0.0" />
+      </dependentAssembly>
+    </assemblyBinding>
+    <assemblyBinding xmlns="urn:schemas-microsoft-com:asm.v1">
+      <dependentAssembly>
+        <assemblyIdentity name="Microsoft.Identity.Client.Extensions.Msal" publicKeyToken="0a613f4dd989e8ae" culture="neutral" />
+        <bindingRedirect oldVersion="0.0.0.0-4.83.1.0" newVersion="4.83.1.0" />
+      </dependentAssembly>
+    </assemblyBinding>
+    <assemblyBinding xmlns="urn:schemas-microsoft-com:asm.v1">
+      <dependentAssembly>
+        <assemblyIdentity name="Azure.Identity" publicKeyToken="92742159e12e44c8" culture="neutral" />
+        <bindingRedirect oldVersion="0.0.0.0-1.11.4.0" newVersion="1.11.4.0" />
+      </dependentAssembly>
+    </assemblyBinding>
+    <assemblyBinding xmlns="urn:schemas-microsoft-com:asm.v1">
+      <dependentAssembly>
+        <assemblyIdentity name="Azure.Security.KeyVault.Keys" publicKeyToken="92742159e12e44c8" culture="neutral" />
+        <bindingRedirect oldVersion="0.0.0.0-4.5.0.0" newVersion="4.5.0.0" />
+      </dependentAssembly>
+    </assemblyBinding>
+    <assemblyBinding xmlns="urn:schemas-microsoft-com:asm.v1">
+      <dependentAssembly>
+        <assemblyIdentity name="Azure.Storage.Common" publicKeyToken="92742159e12e44c8" culture="neutral" />
+        <bindingRedirect oldVersion="0.0.0.0-12.15.0.0" newVersion="12.15.0.0" />
+      </dependentAssembly>
+    </assemblyBinding>
+    <assemblyBinding xmlns="urn:schemas-microsoft-com:asm.v1">
+      <dependentAssembly>
+        <assemblyIdentity name="Bond.Attributes" publicKeyToken="87e9ead25a117286" culture="neutral" />
+        <bindingRedirect oldVersion="0.0.0.0-13.0.0.100" newVersion="13.0.0.100" />
+      </dependentAssembly>
+    </assemblyBinding>
+    <assemblyBinding xmlns="urn:schemas-microsoft-com:asm.v1">
+      <dependentAssembly>
+        <assemblyIdentity name="Bond.IO" publicKeyToken="87e9ead25a117286" culture="neutral" />
+        <bindingRedirect oldVersion="0.0.0.0-13.0.0.100" newVersion="13.0.0.100" />
+      </dependentAssembly>
+    </assemblyBinding>
+    <assemblyBinding xmlns="urn:schemas-microsoft-com:asm.v1">
+      <dependentAssembly>
+        <assemblyIdentity name="Bond" publicKeyToken="87e9ead25a117286" culture="neutral" />
+        <bindingRedirect oldVersion="0.0.0.0-13.0.0.100" newVersion="13.0.0.100" />
+      </dependentAssembly>
+    </assemblyBinding>
+    <assemblyBinding xmlns="urn:schemas-microsoft-com:asm.v1">
+      <dependentAssembly>
+        <assemblyIdentity name="Microsoft.Data.Services.Client" publicKeyToken="31bf3856ad364e35" culture="neutral" />
+        <bindingRedirect oldVersion="0.0.0.0-5.8.4.0" newVersion="5.8.4.0" />
+      </dependentAssembly>
+    </assemblyBinding>
+    <assemblyBinding xmlns="urn:schemas-microsoft-com:asm.v1">
+      <dependentAssembly>
+        <assemblyIdentity name="Microsoft.DI.MSDISDKConnectorInterfaces" publicKeyToken="31bf3856ad364e35" culture="neutral" />
+        <bindingRedirect oldVersion="0.0.0.0-1.0.0.1392" newVersion="1.0.0.1392" />
+      </dependentAssembly>
+    </assemblyBinding>
+    <assemblyBinding xmlns="urn:schemas-microsoft-com:asm.v1">
+      <dependentAssembly>
+        <assemblyIdentity name="Microsoft.Extensions.Caching.Abstractions" publicKeyToken="adb9793829ddae60" culture="neutral" />
+        <bindingRedirect oldVersion="0.0.0.0-9.0.0.0" newVersion="9.0.0.0" />
+      </dependentAssembly>
+    </assemblyBinding>
+    <assemblyBinding xmlns="urn:schemas-microsoft-com:asm.v1">
+      <dependentAssembly>
+        <assemblyIdentity name="Microsoft.Extensions.Caching.Memory" publicKeyToken="adb9793829ddae60" culture="neutral" />
+        <bindingRedirect oldVersion="0.0.0.0-9.0.0.0" newVersion="9.0.0.0" />
+      </dependentAssembly>
+    </assemblyBinding>
+    <assemblyBinding xmlns="urn:schemas-microsoft-com:asm.v1">
+      <dependentAssembly>
+        <assemblyIdentity name="Microsoft.Extensions.Configuration" publicKeyToken="adb9793829ddae60" culture="neutral" />
+        <bindingRedirect oldVersion="0.0.0.0-9.0.0.0" newVersion="9.0.0.0" />
+      </dependentAssembly>
+    </assemblyBinding>
+    <assemblyBinding xmlns="urn:schemas-microsoft-com:asm.v1">
+      <dependentAssembly>
+        <assemblyIdentity name="Microsoft.Extensions.Configuration.Abstractions" publicKeyToken="adb9793829ddae60" culture="neutral" />
+        <bindingRedirect oldVersion="0.0.0.0-9.0.0.0" newVersion="9.0.0.0" />
+      </dependentAssembly>
+    </assemblyBinding>
+    <assemblyBinding xmlns="urn:schemas-microsoft-com:asm.v1">
+      <dependentAssembly>
+        <assemblyIdentity name="Microsoft.Extensions.Configuration.FileExtensions" publicKeyToken="adb9793829ddae60" culture="neutral" />
+        <bindingRedirect oldVersion="0.0.0.0-3.1.4.0" newVersion="3.1.4.0" />
+      </dependentAssembly>
+    </assemblyBinding>
+    <assemblyBinding xmlns="urn:schemas-microsoft-com:asm.v1">
+      <dependentAssembly>
+        <assemblyIdentity name="Microsoft.Extensions.DependencyInjection" publicKeyToken="adb9793829ddae60" culture="neutral" />
+        <bindingRedirect oldVersion="0.0.0.0-9.0.0.0" newVersion="9.0.0.0" />
+      </dependentAssembly>
+    </assemblyBinding>
+    <assemblyBinding xmlns="urn:schemas-microsoft-com:asm.v1">
+      <dependentAssembly>
+        <assemblyIdentity name="Microsoft.Extensions.DependencyInjection.Abstractions" publicKeyToken="adb9793829ddae60" culture="neutral" />
+        <bindingRedirect oldVersion="0.0.0.0-9.0.0.0" newVersion="9.0.0.0" />
+      </dependentAssembly>
+    </assemblyBinding>
+    <assemblyBinding xmlns="urn:schemas-microsoft-com:asm.v1">
+      <dependentAssembly>
+        <assemblyIdentity name="Microsoft.Extensions.FileProviders.Abstractions" publicKeyToken="adb9793829ddae60" culture="neutral" />
+        <bindingRedirect oldVersion="0.0.0.0-3.1.4.0" newVersion="3.1.4.0" />
+      </dependentAssembly>
+    </assemblyBinding>
+    <assemblyBinding xmlns="urn:schemas-microsoft-com:asm.v1">
+      <dependentAssembly>
+        <assemblyIdentity name="Microsoft.Extensions.FileProviders.Physical" publicKeyToken="adb9793829ddae60" culture="neutral" />
+        <bindingRedirect oldVersion="0.0.0.0-3.1.4.0" newVersion="3.1.4.0" />
+      </dependentAssembly>
+    </assemblyBinding>
+    <assemblyBinding xmlns="urn:schemas-microsoft-com:asm.v1">
+      <dependentAssembly>
+        <assemblyIdentity name="Microsoft.Extensions.FileSystemGlobbing" publicKeyToken="adb9793829ddae60" culture="neutral" />
+        <bindingRedirect oldVersion="0.0.0.0-3.1.4.0" newVersion="3.1.4.0" />
+      </dependentAssembly>
+    </assemblyBinding>
+    <assemblyBinding xmlns="urn:schemas-microsoft-com:asm.v1">
+      <dependentAssembly>
+        <assemblyIdentity name="Microsoft.Extensions.Http" publicKeyToken="adb9793829ddae60" culture="neutral" />
+        <bindingRedirect oldVersion="0.0.0.0-5.0.0.0" newVersion="5.0.0.0" />
+      </dependentAssembly>
+    </assemblyBinding>
+    <assemblyBinding xmlns="urn:schemas-microsoft-com:asm.v1">
+      <dependentAssembly>
+        <assemblyIdentity name="Microsoft.Extensions.Logging" publicKeyToken="adb9793829ddae60" culture="neutral" />
+        <bindingRedirect oldVersion="0.0.0.0-9.0.0.0" newVersion="9.0.0.0" />
+      </dependentAssembly>
+    </assemblyBinding>
+    <assemblyBinding xmlns="urn:schemas-microsoft-com:asm.v1">
+      <dependentAssembly>
+        <assemblyIdentity name="Microsoft.Extensions.Options" publicKeyToken="adb9793829ddae60" culture="neutral" />
+        <bindingRedirect oldVersion="0.0.0.0-9.0.0.0" newVersion="9.0.0.0" />
+      </dependentAssembly>
+    </assemblyBinding>
+    <assemblyBinding xmlns="urn:schemas-microsoft-com:asm.v1">
+      <dependentAssembly>
+        <assemblyIdentity name="Microsoft.Extensions.Primitives" publicKeyToken="adb9793829ddae60" culture="neutral" />
+        <bindingRedirect oldVersion="0.0.0.0-9.0.0.0" newVersion="9.0.0.0" />
+      </dependentAssembly>
+    </assemblyBinding>
+    <assemblyBinding xmlns="urn:schemas-microsoft-com:asm.v1">
+      <dependentAssembly>
+        <assemblyIdentity name="Microsoft.Identity.Client" publicKeyToken="0a613f4dd989e8ae" culture="neutral" />
+        <bindingRedirect oldVersion="0.0.0.0-4.83.1.0" newVersion="4.83.1.0" />
+      </dependentAssembly>
+    </assemblyBinding>
+    <assemblyBinding xmlns="urn:schemas-microsoft-com:asm.v1">
+      <dependentAssembly>
+        <assemblyIdentity name="Microsoft.IdentityModel.Abstractions" publicKeyToken="31bf3856ad364e35" culture="neutral" />
+        <bindingRedirect oldVersion="0.0.0.0-8.16.0.0" newVersion="8.16.0.0" />
+      </dependentAssembly>
+    </assemblyBinding>
+    <assemblyBinding xmlns="urn:schemas-microsoft-com:asm.v1">
+      <dependentAssembly>
+        <assemblyIdentity name="Microsoft.IdentityModel.Protocols" publicKeyToken="31bf3856ad364e35" culture="neutral" />
+        <bindingRedirect oldVersion="0.0.0.0-7.6.2.0" newVersion="7.6.2.0" />
+      </dependentAssembly>
+    </assemblyBinding>
+    <assemblyBinding xmlns="urn:schemas-microsoft-com:asm.v1">
+      <dependentAssembly>
+        <assemblyIdentity name="Microsoft.IdentityModel.Protocols.OpenIdConnect" publicKeyToken="31bf3856ad364e35" culture="neutral" />
+        <bindingRedirect oldVersion="0.0.0.0-7.6.2.0" newVersion="7.6.2.0" />
+      </dependentAssembly>
+    </assemblyBinding>
+    <assemblyBinding xmlns="urn:schemas-microsoft-com:asm.v1">
+      <dependentAssembly>
+        <assemblyIdentity name="Microsoft.Win32.Registry" publicKeyToken="b03f5f7f11d50a3a" culture="neutral" />
+        <bindingRedirect oldVersion="0.0.0.0-4.1.3.0" newVersion="4.1.3.0" />
+      </dependentAssembly>
+    </assemblyBinding>
+    <assemblyBinding xmlns="urn:schemas-microsoft-com:asm.v1">
+      <dependentAssembly>
+        <assemblyIdentity name="ICSharpCode.SharpZipLib" publicKeyToken="1b03e6acf1164f73" culture="neutral" />
+        <bindingRedirect oldVersion="0.0.0.0-1.3.3.11" newVersion="1.3.3.11" />
+      </dependentAssembly>
+    </assemblyBinding>
+    <assemblyBinding xmlns="urn:schemas-microsoft-com:asm.v1">
+      <dependentAssembly>
+        <assemblyIdentity name="System.ClientModel" publicKeyToken="92742159e12e44c8" culture="neutral" />
+        <bindingRedirect oldVersion="0.0.0.0-1.6.1.0" newVersion="1.6.1.0" />
+      </dependentAssembly>
+    </assemblyBinding>
+    <assemblyBinding xmlns="urn:schemas-microsoft-com:asm.v1">
+      <dependentAssembly>
+        <assemblyIdentity name="System.Configuration.ConfigurationManager" publicKeyToken="cc7b13ffcd2ddd51" culture="neutral" />
+        <bindingRedirect oldVersion="0.0.0.0-7.0.0.0" newVersion="7.0.0.0" />
+      </dependentAssembly>
+    </assemblyBinding>
+    <assemblyBinding xmlns="urn:schemas-microsoft-com:asm.v1">
+      <dependentAssembly>
+        <assemblyIdentity name="System.IO.Hashing" publicKeyToken="cc7b13ffcd2ddd51" culture="neutral" />
+        <bindingRedirect oldVersion="0.0.0.0-8.0.0.0" newVersion="8.0.0.0" />
+      </dependentAssembly>
+    </assemblyBinding>
+    <assemblyBinding xmlns="urn:schemas-microsoft-com:asm.v1">
+      <dependentAssembly>
+        <assemblyIdentity name="System.Memory" publicKeyToken="cc7b13ffcd2ddd51" culture="neutral" />
+        <bindingRedirect oldVersion="0.0.0.0-4.0.1.2" newVersion="4.0.1.2" />
+      </dependentAssembly>
+    </assemblyBinding>
+    <assemblyBinding xmlns="urn:schemas-microsoft-com:asm.v1">
+      <dependentAssembly>
+        <assemblyIdentity name="System.Memory.Data" publicKeyToken="cc7b13ffcd2ddd51" culture="neutral" />
+        <bindingRedirect oldVersion="0.0.0.0-8.0.0.1" newVersion="8.0.0.1" />
+      </dependentAssembly>
+    </assemblyBinding>
+    <assemblyBinding xmlns="urn:schemas-microsoft-com:asm.v1">
+      <dependentAssembly>
+        <assemblyIdentity name="System.Numerics.Vectors" publicKeyToken="b03f5f7f11d50a3a" culture="neutral" />
+        <bindingRedirect oldVersion="0.0.0.0-4.1.4.0" newVersion="4.1.4.0" />
+      </dependentAssembly>
+    </assemblyBinding>
+    <assemblyBinding xmlns="urn:schemas-microsoft-com:asm.v1">
+      <dependentAssembly>
+        <assemblyIdentity name="System.Runtime.CompilerServices.Unsafe" publicKeyToken="b03f5f7f11d50a3a" culture="neutral" />
+        <bindingRedirect oldVersion="0.0.0.0-6.0.0.0" newVersion="6.0.0.0" />
+      </dependentAssembly>
+    </assemblyBinding>
+    <assemblyBinding xmlns="urn:schemas-microsoft-com:asm.v1">
+      <dependentAssembly>
+        <assemblyIdentity name="System.Security.AccessControl" publicKeyToken="b03f5f7f11d50a3a" culture="neutral" />
+        <bindingRedirect oldVersion="0.0.0.0-6.0.0.0" newVersion="6.0.0.0" />
+      </dependentAssembly>
+    </assemblyBinding>
+    <assemblyBinding xmlns="urn:schemas-microsoft-com:asm.v1">
+      <dependentAssembly>
+        <assemblyIdentity name="System.Security.Cryptography.ProtectedData" publicKeyToken="b03f5f7f11d50a3a" culture="neutral" />
+        <bindingRedirect oldVersion="0.0.0.0-8.0.0.0" newVersion="8.0.0.0" />
+      </dependentAssembly>
+    </assemblyBinding>
+    <assemblyBinding xmlns="urn:schemas-microsoft-com:asm.v1">
+      <dependentAssembly>
+        <assemblyIdentity name="System.Security.Permissions" publicKeyToken="cc7b13ffcd2ddd51" culture="neutral" />
+        <bindingRedirect oldVersion="0.0.0.0-8.0.0.0" newVersion="8.0.0.0" />
+      </dependentAssembly>
+    </assemblyBinding>
+    <assemblyBinding xmlns="urn:schemas-microsoft-com:asm.v1">
+      <dependentAssembly>
+        <assemblyIdentity name="System.ValueTuple" publicKeyToken="cc7b13ffcd2ddd51" culture="neutral" />
+        <bindingRedirect oldVersion="0.0.0.0-4.0.3.0" newVersion="4.0.3.0" />
+      </dependentAssembly>
+    </assemblyBinding>
+    <assemblyBinding xmlns="urn:schemas-microsoft-com:asm.v1">
+      <dependentAssembly>
+        <assemblyIdentity name="Microsoft.ServiceBus" publicKeyToken="31bf3856ad364e35" culture="neutral" />
+        <bindingRedirect oldVersion="0.0.0.0-3.0.0.0" newVersion="3.0.0.0" />
+      </dependentAssembly>
+    </assemblyBinding>
+    <assemblyBinding xmlns="urn:schemas-microsoft-com:asm.v1">
+      <dependentAssembly>
+        <assemblyIdentity name="Microsoft.WindowsAzure.ServiceRuntime" publicKeyToken="31bf3856ad364e35" culture="neutral" />
+        <bindingRedirect oldVersion="0.0.0.0-2.7.0.0" newVersion="2.7.0.0" />
+      </dependentAssembly>
+    </assemblyBinding>
+    <assemblyBinding xmlns="urn:schemas-microsoft-com:asm.v1">
+      <dependentAssembly>
+        <assemblyIdentity name="MonAgentListener" publicKeyToken="31bf3856ad364e35" culture="neutral" />
+        <bindingRedirect oldVersion="0.0.0.0-46.9.0.0" newVersion="46.9.0.0" />
+      </dependentAssembly>
+    </assemblyBinding>
+    <assemblyBinding xmlns="urn:schemas-microsoft-com:asm.v1">
+      <dependentAssembly>
+        <assemblyIdentity name="Microsoft.Cis.Monitoring.Events" publicKeyToken="31bf3856ad364e35" culture="neutral" />
+        <bindingRedirect oldVersion="0.0.0.0-46.9.0.0" newVersion="46.9.0.0" />
+      </dependentAssembly>
+    </assemblyBinding>
+    <assemblyBinding xmlns="urn:schemas-microsoft-com:asm.v1">
+      <dependentAssembly>
+        <assemblyIdentity name="Azure.Storage.Files.DataLake" publicKeyToken="92742159e12e44c8" culture="neutral" />
+        <bindingRedirect oldVersion="0.0.0.0-12.18.0.0" newVersion="12.18.0.0" />
+      </dependentAssembly>
+    </assemblyBinding>
+    <assemblyBinding xmlns="urn:schemas-microsoft-com:asm.v1">
+      <dependentAssembly>
+        <assemblyIdentity name="Microsoft.Azure.Search" publicKeyToken="31bf3856ad364e35" culture="neutral" />
+        <bindingRedirect oldVersion="0.0.0.0-10.1.0.0" newVersion="10.1.0.0" />
+      </dependentAssembly>
+    </assemblyBinding>
+    <assemblyBinding xmlns="urn:schemas-microsoft-com:asm.v1">
+      <dependentAssembly>
+        <assemblyIdentity name="Azure.ResourceManager" publicKeyToken="92742159e12e44c8" culture="neutral" />
+        <bindingRedirect oldVersion="0.0.0.0-1.12.0.0" newVersion="1.12.0.0" />
+      </dependentAssembly>
+    </assemblyBinding>
+    <assemblyBinding xmlns="urn:schemas-microsoft-com:asm.v1">
+      <dependentAssembly>
+        <assemblyIdentity name="Microsoft.WindowsAzure.Security.Authentication" publicKeyToken="31bf3856ad364e35" culture="neutral" />
+        <bindingRedirect oldVersion="0.0.0.0-3.0.0.0" newVersion="3.0.0.0" />
+      </dependentAssembly>
+    </assemblyBinding>
+    <assemblyBinding xmlns="urn:schemas-microsoft-com:asm.v1">
+      <dependentAssembly>
+        <assemblyIdentity name="Microsoft.WindowsAzure.Security.Authentication.Contracts" publicKeyToken="31bf3856ad364e35" culture="neutral" />
+        <bindingRedirect oldVersion="0.0.0.0-3.0.0.0" newVersion="3.0.0.0" />
+      </dependentAssembly>
+    </assemblyBinding>
+    <assemblyBinding xmlns="urn:schemas-microsoft-com:asm.v1">
+      <dependentAssembly>
+        <assemblyIdentity name="Microsoft.WindowsAzure.Security.CredentialsManagement.Client" publicKeyToken="31bf3856ad364e35" culture="neutral" />
+        <bindingRedirect oldVersion="0.0.0.0-4.7.0.0" newVersion="4.7.0.0" />
+      </dependentAssembly>
+    </assemblyBinding>
+    <assemblyBinding xmlns="urn:schemas-microsoft-com:asm.v1">
+      <dependentAssembly>
+        <assemblyIdentity name="Microsoft.Azure.Monitoring.Common.Helpers" publicKeyToken="6e60c1fe21f23fa9" culture="neutral" />
+        <bindingRedirect oldVersion="0.0.0.0-1.28.0.0" newVersion="1.28.0.0" />
+      </dependentAssembly>
+    </assemblyBinding>
+  </runtime>
+</configuration>
+
+
+---------------------------------------------------------------------
+
+
+
+PS C:\Users\azureuser> Test-NetConnection sqlsv-verify-25487.database.windows.net -Port 1433
+
+
+ComputerName     : sqlsv-verify-25487.database.windows.net
+RemoteAddress    : 10.0.3.4
+RemotePort       : 1433
+InterfaceAlias   : Ethernet
+SourceAddress    : 10.0.1.4
+TcpTestSucceeded : True
+
+
+
+PS C:\Users\azureuser> Test-NetConnection 10.0.2.4 -Port 1433
+WARNING: TCP connect to (10.0.2.4 : 1433) failed
+
+
+-------------------------------------------------------------------------
+
+PS C:\Users\azureuser> Get-NetFirewallRule -DisplayName "*SQL*" | Select-Object DisplayName, Enabled, Direction, Action, Profile
+>>
+
+
+DisplayName : Block network access for AppContainer-00 in SQL Server instance MSSQLSERVER
+Enabled     : True
+Direction   : Outbound
+Action      : Block
+Profile     : Any
+
+DisplayName : Block network access for AppContainer-01 in SQL Server instance MSSQLSERVER
+Enabled     : True
+Direction   : Outbound
+Action      : Block
+Profile     : Any
+
+DisplayName : Block network access for AppContainer-02 in SQL Server instance MSSQLSERVER
+Enabled     : True
+Direction   : Outbound
+Action      : Block
+Profile     : Any
+
+DisplayName : Block network access for AppContainer-03 in SQL Server instance MSSQLSERVER
+Enabled     : True
+Direction   : Outbound
+Action      : Block
+Profile     : Any
+
+DisplayName : Block network access for AppContainer-04 in SQL Server instance MSSQLSERVER
+Enabled     : True
+Direction   : Outbound
+Action      : Block
+Profile     : Any
+
+DisplayName : Block network access for AppContainer-05 in SQL Server instance MSSQLSERVER
+Enabled     : True
+Direction   : Outbound
+Action      : Block
+Profile     : Any
+
+DisplayName : Block network access for AppContainer-06 in SQL Server instance MSSQLSERVER
+Enabled     : True
+Direction   : Outbound
+Action      : Block
+Profile     : Any
+
+DisplayName : Block network access for AppContainer-07 in SQL Server instance MSSQLSERVER
+Enabled     : True
+Direction   : Outbound
+Action      : Block
+Profile     : Any
+
+DisplayName : Block network access for AppContainer-08 in SQL Server instance MSSQLSERVER
+Enabled     : True
+Direction   : Outbound
+Action      : Block
+Profile     : Any
+
+DisplayName : Block network access for AppContainer-09 in SQL Server instance MSSQLSERVER
+Enabled     : True
+Direction   : Outbound
+Action      : Block
+Profile     : Any
+
+DisplayName : Block network access for AppContainer-10 in SQL Server instance MSSQLSERVER
+Enabled     : True
+Direction   : Outbound
+Action      : Block
+Profile     : Any
+
+DisplayName : Block network access for AppContainer-11 in SQL Server instance MSSQLSERVER
+Enabled     : True
+Direction   : Outbound
+Action      : Block
+Profile     : Any
+
+DisplayName : Block network access for AppContainer-12 in SQL Server instance MSSQLSERVER
+Enabled     : True
+Direction   : Outbound
+Action      : Block
+Profile     : Any
+
+DisplayName : Block network access for AppContainer-13 in SQL Server instance MSSQLSERVER
+Enabled     : True
+Direction   : Outbound
+Action      : Block
+Profile     : Any
+
+DisplayName : Block network access for AppContainer-14 in SQL Server instance MSSQLSERVER
+Enabled     : True
+Direction   : Outbound
+Action      : Block
+Profile     : Any
+
+DisplayName : Block network access for AppContainer-15 in SQL Server instance MSSQLSERVER
+Enabled     : True
+Direction   : Outbound
+Action      : Block
+Profile     : Any
+
+DisplayName : Block network access for AppContainer-16 in SQL Server instance MSSQLSERVER
+Enabled     : True
+Direction   : Outbound
+Action      : Block
+Profile     : Any
+
+DisplayName : Block network access for AppContainer-17 in SQL Server instance MSSQLSERVER
+Enabled     : True
+Direction   : Outbound
+Action      : Block
+Profile     : Any
+
+DisplayName : Block network access for AppContainer-18 in SQL Server instance MSSQLSERVER
+Enabled     : True
+Direction   : Outbound
+Action      : Block
+Profile     : Any
+
+DisplayName : Block network access for AppContainer-19 in SQL Server instance MSSQLSERVER
+Enabled     : True
+Direction   : Outbound
+Action      : Block
+Profile     : Any
+
+DisplayName : Block network access for AppContainer-20 in SQL Server instance MSSQLSERVER
+Enabled     : True
+Direction   : Outbound
+Action      : Block
+Profile     : Any
+
+
+
+PS C:\Users\azureuser>
+PS C:\Users\azureuser> New-NetFirewallRule -DisplayName "SQL Server 1433" -Direction Inbound -Protocol TCP -LocalPort 1433 -Action Allow
+>>
+
+
+Name                          : {112ac709-d0b6-4261-9e3c-84f3c1f95013}
+DisplayName                   : SQL Server 1433
+Description                   :
+DisplayGroup                  :
+Group                         :
+Enabled                       : True
+Profile                       : Any
+Platform                      : {}
+Direction                     : Inbound
+Action                        : Allow
+EdgeTraversalPolicy           : Block
+LooseSourceMapping            : False
+LocalOnlyMapping              : False
+Owner                         :
+PrimaryStatus                 : OK
+Status                        : The rule was parsed successfully from the store. (65536)
+EnforcementStatus             : NotApplicable
+PolicyStoreSource             : PersistentStore
+PolicyStoreSourceType         : Local
+RemoteDynamicKeywordAddresses : {}
+PolicyAppId                   :
+
+
+
+PS C:\Users\azureuser>
+
+
+--------------------------------------------------------------------------------------------------------------
+
+PS C:\Users\azureuser> Test-NetConnection 10.0.2.4 -Port 1433
+
+
+ComputerName     : 10.0.2.4
+RemoteAddress    : 10.0.2.4
+RemotePort       : 1433
+InterfaceAlias   : Ethernet
+SourceAddress    : 10.0.1.4
+TcpTestSucceeded : True
+
+
+
+PS C:\Users\azureuser>
+
+
+PS C:\Users\azureuser> $sql = @"
+>> ALTER SERVER ROLE ##MS_DefinitionReader## ADD MEMBER [dmsuser];
+>> ALTER SERVER ROLE ##MS_DatabaseConnector## ADD MEMBER [dmsuser];
+>> "@
+>>
+>> $conn = New-Object System.Data.SqlClient.SqlConnection($connStr)
+>> $conn.Open()
+>> $cmd = $conn.CreateCommand()
+>> $cmd.CommandText = $sql
+>> $cmd.ExecuteNonQuery()
+>> $conn.Close()
+-1
+PS C:\Users\azureuser>
+
+------------------------------------------------------------------
+
+SQL Server インスタンス
+サブスクリプション
+My Learning Free Subscription
+場所
+Japan East
+リソース グループ
+rg-dms-network-verify
+SQL Server インスタンス
+-
+ソース データベース
+移行用に選択されたスキーマ
+1
+移行用に選択されたデータベース
+1
+移行用に選択されたテーブル
+1
+Azure SQL のターゲット
+Azure SQL のターゲット
+Azure SQL Database
+サブスクリプション
+My Learning Free Subscription
+場所
+Japan East
+リソース グループ
+rg-dms-network-verify
+Azure SQL Database
+sqlsv-verify-25487
+ターゲット
+sqlsv-verify-25487.database.windows.net
+移行モード
+モード
+オフライン移行
+Azure Database Migration サービス
+サブスクリプション
+My Learning Free Subscription
+場所
+Japan East
+リソース グループ
+rg-dms-network-verify
+Azure Database Migration サービス
+dms-sql-to-sqldatabase-001
+セルフホステッド統合ランタイム ノード
+vm-shir
+
+
+---------------------------------------------------
+
+azureuser@vm-proxy:~$ sudo awk '{print $7}' /var/log/squid/access.log | cut -d: -f1 | sort -u
+asgardprodjapaneast-11.servicebus.windows.net
+download.microsoft.com
+error
+g0-prod-ty-vaz00001-sb.servicebus.windows.net
+g12-prod-ty-vaz00001-sb.servicebus.windows.net
+g13-prod-ty-vaz00001-sb.servicebus.windows.net
+g14-prod-ty-vaz00001-sb.servicebus.windows.net
+g3-prod-ty-vaz00001-sb.servicebus.windows.net
+g6-prod-ty-vaz00001-sb.servicebus.windows.net
+g7-prod-ty-vaz00001-sb.servicebus.windows.net
+g8-prod-ty-vaz00001-sb.servicebus.windows.net
+g9-prod-ty-vaz00001-sb.servicebus.windows.net
+jpe.frontend.clouddatahub.net
+ne.frontend.clouddatahub.net

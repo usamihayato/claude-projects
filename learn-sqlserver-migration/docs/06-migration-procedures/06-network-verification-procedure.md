@@ -1,21 +1,40 @@
 # DMS オフライン移行 通信要件 検証手順書
-### Azure 検証環境（SHIR VM + Azure DMS）で ADF 既存許可の流用可否を確認する
+### Azure 検証環境（SHIR VM + Azure DMS）でオープン→クローズの2フェーズにより必要 FQDN を実測する
 
 ---
 
 ## 検証の目的
 
 本番の SHIR は **ADF 用に構築済みのオンプレサーバ**に相乗りする想定です。
-そこで許可済みの通信要件だけで DMS が動作するかを、Azure 検証環境で事前に確認します。
+DMS がどの FQDN を実際に必要とするかを、Azure 検証環境で**2 フェーズ方式**で確定します。
+
+```
+フェーズ1｜オープン検証
+  プロキシを「全許可 + ログ記録」にする
+  → SHIR登録 ～ 移行完了まで通しで実行（＝インターネット開けた状態で成功する実績の再現）
+  → ログから実際にアクセスされた全 FQDN を抽出する
+
+フェーズ2｜クローズ検証
+  プロキシをフェーズ1で抽出した FQDN だけに絞り込む
+  → SHIR を再登録 ～ 移行を再実行
+  → 同じ結果が再現できれば「そのリストで過不足なく動く」ことが証明される
+```
+
+> **フェーズ1の「オープン」の意味に注意**
+> SHIR VM は NSG でインターネット直結を遮断したままです（STEP 4 参照）。
+> 「オープン」とはプロキシ（Squid）側のホワイトリストを一時的に全許可にすることを指します。
+> こうすることで「インターネットを開けた状態での成功」と同じ通信条件を保ちながら、
+> **どの FQDN に実際にアクセスしたかをログとして残せます**。
+> プロキシを介さず本当にインターネットへ直結してしまうと、通信先が記録できず検証になりません。
 
 | # | 検証したいこと | 判定基準 |
 |---|---|---|
-| ① | ADF 用に許可済みの FQDN だけで SHIR が DMS に登録できるか | 登録が「実行中」になる |
-| ② | DMS が追加で要求する FQDN は何か | プロキシのログに拒否記録が出るか |
+| ① | フェーズ1で SHIR 登録〜移行が成功するか（実績の再現） | 登録「実行中」＋移行「完了」 |
+| ② | フェーズ1で実際にアクセスされた FQDN は何か | access.log から全件抽出 |
 | ③ | SQL Database の PE へ TCP 1433 で到達できるか | sqlcmd で接続できる |
-| ④ | 上記の状態で移行が完走するか | DMS の移行が「完了」になる |
+| ④ | フェーズ2（②のリストのみ許可）で同じ結果が再現するか | 登録「実行中」＋移行「完了」、拒否ログなし |
 
-> **この検証で分かること**：DMS 用に追加申請すべき FQDN の**具体的なリスト**
+> **この検証で分かること**：DMS が必要とする FQDN の**過不足ない具体的なリスト**
 > **分からないこと**：本番の DNS 設計・ER 帯域・TLS 1.0（→ 後述の「検証環境と本番の差分」参照）
 
 ---
@@ -52,15 +71,16 @@
 | 本番 | 検証環境での代替 | 目的 |
 |---|---|---|
 | オンプレ SHIR サーバ | `vm-shir`（Windows Server VM） | SHIR の動作検証 |
-| 社内プロキシ（FQDN ホワイトリスト） | `vm-proxy`（Squid） | **許可 FQDN を本番と同じにして再現** |
+| 社内プロキシ（FQDN ホワイトリスト） | `vm-proxy`（Squid） | **フェーズ1で全許可→ログ記録、フェーズ2で絞り込み** |
 | ExpressRoute → Azure PE | VNet 内ルーティング | PE への 1433 到達性 |
 | オンプレ SQL Server 2008 R2 | `vm-source-sql` | 移行元 |
 | Azure SQL Database（本番） | Azure SQL Database（検証） | 移行先 |
 
 > **Squid を使う理由**
 > 本番の SHIR はプロキシを明示設定（`diahost.exe.config`）して通信します。
-> Squid なら同じ構成を再現でき、かつ **access.log で拒否された FQDN が特定できます**。
-> これが本検証の核心です。
+> Squid なら同じ構成を再現でき、かつ **access.log で通信先の FQDN を全て記録できます**。
+> フェーズ1では全許可にしてログを取り、フェーズ2ではそのログから作った許可リストだけに絞る。
+> この往復が本検証の核心です。
 
 ---
 
@@ -69,11 +89,11 @@
 | 項目 | 必要なもの |
 |---|---|
 | Azure サブスクリプション | 共同作成者以上の権限 |
-| ADF 用の許可 FQDN リスト | **本番のプロキシ設定から現物を入手**（推測しない） |
 | 作業端末 | Azure CLI または Azure Portal |
+| （任意）本番プロキシの既存許可 FQDN リスト | あればフェーズ1で抽出した結果との**突き合わせ**に使える |
 
-> ⚠️ **最重要**：本検証の価値は「本番と同じホワイトリスト」を Squid に入れる点にあります。
-> 本番プロキシの設定を必ず先に入手してください。
+> 本手順はフェーズ1で必要 FQDN を実測するため、事前に本番のホワイトリストを入手できていなくても進められます。
+> 入手できている場合は、フェーズ1の抽出結果と比較することで「ADF 許可分で足りるか／追加が要るか」も同時に判定できます。
 
 ---
 
@@ -104,38 +124,13 @@ az network vnet subnet create --resource-group $RG --vnet-name $VNET \
   --name snet-proxy --address-prefix 10.0.4.0/24
 ```
 
-### 1-1 Azure Bastion を追加（vm-shir / vm-source-sql への RDP 用）
-
-`vm-shir` と `vm-source-sql` は後続手順で **Public IP なし**（`--public-ip-address ""`）で作成します。
-これは「本番の閉域環境を再現する」ための意図的な構成なので、RDP のためだけに Public IP を追加するのは避け、**Azure Bastion 経由で接続**します。
-
-```bash
-# Bastion 専用サブネット（名前は AzureBastionSubnet 固定・/26 以上が必要）
-az network vnet subnet create --resource-group $RG --vnet-name $VNET \
-  --name AzureBastionSubnet --address-prefix 10.0.10.0/26
-
-# Bastion 用 Public IP
-az network public-ip create --resource-group $RG \
-  --name pip-bastion --sku Standard
-
-# Bastion 本体（Basic SKU＝ブラウザ接続のみで十分、ネイティブクライアント不要なら最安）
-az network bastion create --resource-group $RG \
-  --name bastion-verify --sku Basic \
-  --vnet-name $VNET --public-ip-address pip-bastion \
-  --location $LOC
-```
-
-> ⚠️ Bastion は**時間課金**（Basic SKU で概算 ¥20〜30/時間程度、要現在の価格確認）です。
-> 検証が終わったら他リソースと合わせて `az group delete` で削除してください。
-> 数時間の検証であればコストは軽微です。
-
-**接続方法**：Azure Portal → 対象 VM（`vm-shir` など）の概要ページ →「接続」→「Bastion」タブ → ユーザー名・パスワードを入力して「接続」。ブラウザ上に RDP 画面が開きます（クライアント側の追加インストール不要）。
-
 ---
 
 ## STEP 2｜プロキシ VM（Squid）を構築
 
 ### 2-1 VM 作成
+
+パブリック IP は付与しません（管理アクセスは Bastion 経由に統一するため）。
 
 ```bash
 az vm create \
@@ -147,46 +142,39 @@ az vm create \
   --subnet snet-proxy \
   --admin-username azureuser \
   --generate-ssh-keys \
-  --public-ip-sku Standard
+  --public-ip-address ""
 ```
 
 ### 2-2 Squid のインストール
 
-VM に SSH でログインして実行します。
+Azure Portal → `vm-proxy` →「接続」→「Bastion」タブから SSH 接続し、ブラウザ上のターミナルで実行します。
+（STEP 1-2 で Bastion を未デプロイの場合は、先にそちらを実施してください）
 
 ```bash
 sudo apt update && sudo apt install -y squid
 sudo cp /etc/squid/squid.conf /etc/squid/squid.conf.bak
 ```
 
-### 2-3 ホワイトリストの設定
+### 2-3 フェーズ1用の設定（全許可＋ログ記録）
 
 `/etc/squid/squid.conf` を以下の内容で作成します。
+**この段階ではドメインを絞り込みません。** 目的は「何にアクセスしたか」を漏れなく記録することです。
 
 ```
-# ===== 検証用 Squid 設定 =====
+# ===== フェーズ1: 全許可 + ログ記録 =====
 http_port 3128
 
 # 接続元（SHIR サブネット）
 acl shir_net src 10.0.1.0/24
 
-# ▼▼▼ ここに「ADF 用に本番で許可済みの FQDN」だけを列挙する ▼▼▼
-# 先頭のドットはサブドメイン全体（ワイルドカード相当）を意味する
-acl adf_allowed dstdomain .servicebus.windows.net
-acl adf_allowed dstdomain .frontend.clouddatahub.net
-acl adf_allowed dstdomain download.microsoft.com
-acl adf_allowed dstdomain login.microsoftonline.com
-acl adf_allowed dstdomain .datafactory.azure.net
-# ▲▲▲ 本番の設定に合わせて必ず修正すること ▲▲▲
-
 acl SSL_ports port 443
 acl CONNECT method CONNECT
 
 http_access deny CONNECT !SSL_ports
-http_access allow shir_net adf_allowed
+http_access allow shir_net
 http_access deny all
 
-# 拒否内容を追跡するためログを詳細化
+# 通信先を漏れなく記録する
 access_log /var/log/squid/access.log squid
 ```
 
@@ -204,8 +192,11 @@ sudo tail -f /var/log/squid/access.log
 ```
 
 > **ログの見方**
-> - `TCP_TUNNEL/200` → 許可されて通った
-> - `TCP_DENIED/403` → **ホワイトリストにないため拒否された＝追加申請が必要な FQDN**
+> - `TCP_TUNNEL/200` → 通過した通信（フェーズ1では基本的に全てこれになるはず）
+> - `TCP_DENIED/403` → 拒否された通信（フェーズ1で出たら shir_net の設定ミスなどを疑う）
+>
+> フェーズ1のログが「実際に必要な FQDN の正解データ」になります。
+> フェーズ2への絞り込みは STEP 9 で行います。
 
 ---
 
@@ -216,13 +207,19 @@ az vm create \
   --resource-group $RG \
   --name vm-source-sql \
   --image MicrosoftSQLServer:sql2019-ws2022:sqldev-gen2:latest \
-  --size Standard_D2s_v3 \
+  --size Standard_B2s \
   --vnet-name $VNET \
   --subnet snet-source \
   --admin-username azureuser \
   --admin-password '（強いパスワード）' \
   --public-ip-address ""
 ```
+
+> **サイズを `Standard_B2s`（バースト可能・2 vCPU/4GB）にしている理由**
+> 通信要件の検証には性能は関係なく、テストデータも 3 行のみです。
+> `Dsv3` 系の汎用 VM より安価なバースト可能シリーズで十分なため、コスト優先でこのサイズにしています。
+
+---
 
 > ⚠️ **SQL Server 2008 R2 は Marketplace に存在しません**
 > 通信要件（ポート・FQDN）の検証には SQL Server のバージョンは影響しないため、
@@ -231,7 +228,7 @@ az vm create \
 
 ### 検証用データベースの作成
 
-VM に Bastion 経由で RDP して（STEP 1-1 参照）、SSMS で実行します。
+VM に RDP して SSMS で実行します。
 
 ```sql
 CREATE DATABASE TestDB1;
@@ -241,15 +238,32 @@ CREATE TABLE dbo.T1 (id INT IDENTITY PRIMARY KEY, val NVARCHAR(100));
 INSERT INTO dbo.T1 (val) VALUES ('test1'), ('test2'), ('test3');
 GO
 
--- SQL 認証を有効化（混合モード）してから移行用ユーザーを作成
+-- 混合モード（SQL + Windows認証）を有効化（既定では Windows 認証のみ）
+USE [master];
+EXEC xp_instance_regwrite N'HKEY_LOCAL_MACHINE', N'Software\Microsoft\MSSQLServer\MSSQLServer', N'LoginMode', REG_DWORD, 2;
+GO
+```
+
+レジストリの変更を反映させるため、SQL Server サービスを再起動します（`vm-source-sql` の PowerShell で実行）。
+
+```powershell
+Restart-Service MSSQLSERVER -Force
+```
+
+再起動後、SSMS で再接続し、混合モードが有効になったことを確認します。
+
+```sql
+-- 結果が 0 なら混合モード有効（1のままなら再起動できていない可能性）
+SELECT SERVERPROPERTY('IsIntegratedSecurityOnly');
+```
+
+混合モードを確認できたら、移行用ユーザーを作成します。
+
+```sql
 CREATE LOGIN migrateuser WITH PASSWORD = '（強いパスワード）';
 USE TestDB1;
 CREATE USER migrateuser FOR LOGIN migrateuser;
 ALTER ROLE db_datareader ADD MEMBER migrateuser;
-
--- 移行先が Azure SQL Database の場合の公式必須権限（db_datareader だけでは不足）
-USE master;
-GRANT VIEW ANY DEFINITION TO migrateuser;
 GO
 ```
 
@@ -269,26 +283,6 @@ GO
 > SQL Server 構成マネージャーで **TCP/IP プロトコルを有効化**し、
 > Windows ファイアウォールで **TCP 1433 の受信を許可**してください。
 
-```powershell
-# Windows ファイアウォールで 1433 の受信を許可
-New-NetFirewallRule -DisplayName "SQL Server 1433" -Direction Inbound -Protocol TCP -LocalPort 1433 -Action Allow
-```
-
-> TCP/IP プロトコルの有効化は GUI 操作のみ：SQL Server 構成マネージャー →「SQL Server ネットワークの構成」→ 対象インスタンスの「プロトコル」→ TCP/IP を有効化 → SQL Server サービスを再起動。
-
-### 3-1 接続できない場合の切り分け
-
-`az vm create` が `--nsg` 省略時に自動生成する NSG にも、**VNet 内通信を全ポート許可する既定ルール（`AllowVnetInBound`, 優先度65000）が必ず含まれる**ため、同一 VNet 内（`vm-shir` → `vm-source-sql`）の通信は NSG では基本的にブロックされません。
-接続できない場合は、まず NSG ではなく **ゲスト OS 側**（Windows ファイアウォール／SQL Server の TCP/IP 設定）を疑ってください。
-
-**切り分け方法**（`vm-shir` の PowerShell で実行）：
-
-```powershell
-Test-NetConnection 10.0.2.4 -Port 1433
-```
-
-`TcpTestSucceeded` が `False` なら上記 NSG 設定が未実施。`True` なのに接続エラーが出る場合は SQL Server 側（TCP/IP 未有効化・混合モード認証未設定・`migrateuser` の作成漏れ）を疑ってください。
-
 ---
 
 ## STEP 4｜SHIR VM を作成（インターネット直結を遮断）
@@ -300,13 +294,17 @@ az vm create \
   --resource-group $RG \
   --name vm-shir \
   --image Win2022Datacenter \
-  --size Standard_D2s_v3 \
+  --size Standard_B2ms \
   --vnet-name $VNET \
   --subnet snet-shir \
   --admin-username azureuser \
   --admin-password '（強いパスワード）' \
   --public-ip-address ""
 ```
+
+> **サイズを `Standard_B2ms`（バースト可能・2 vCPU/8GB）にしている理由**
+> SHIR の公式推奨（2 コア／8GB メモリ）は満たしつつ、`Dsv3` 系の汎用 VM より安価な
+> バースト可能シリーズを選んでいます。通信要件の検証自体には性能は影響しません。
 
 ### 4-2 NSG でインターネット直結を遮断（本番の閉域環境を再現）
 
@@ -370,8 +368,19 @@ az sql db create \
   --resource-group $RG \
   --server $SQLSERVER \
   --name TestDB1 \
-  --service-objective GP_Gen5_2
+  --edition GeneralPurpose \
+  --family Gen5 \
+  --capacity 1 \
+  --compute-model Serverless \
+  --min-capacity 0.5 \
+  --auto-pause-delay 60
 ```
+
+> **Serverless（自動一時停止）にしている理由**
+> 検証は数日にわたって断続的に実行するため、常時稼働の GP_Gen5_2（Provisioned）だと
+> アイドル時間にも課金が発生します。Serverless なら 60 分未使用で自動一時停止し、
+> 次に接続があると自動再開します（再開時に数十秒〜1分程度の遅延あり）。
+> 通信要件の検証自体には影響しません。
 
 ### 5-2 パブリックアクセスを無効化（本番と同条件）
 
@@ -409,27 +418,72 @@ az network private-endpoint dns-zone-group create \
 
 ### 5-4 移行用ユーザーの作成
 
-パブリックアクセスを無効にしたため、VNet 内の VM から SSMS で接続して実行します。
-
-> **`vm-shir` でも `vm-source-sql` でもどちらでも接続できます。**
-> Private DNS ゾーンは `snet-pe` だけでなく **VNet 全体**（`$VNET`）にリンクしているため（STEP 5-3）、
-> `snet-source`（`vm-source-sql`）からも `<論理サーバー名>.database.windows.net` が PE のプライベート IP（`10.0.3.x`）に正しく解決されます。
-> また `snet-source` には制限的な NSG を付けていない（NSG を付けたのは `snet-shir` のみ）ため、TCP 1433 も通ります。
-> SSMS が入っている `vm-source-sql` を使う場合は、事前に `nslookup <論理サーバー名>.database.windows.net` で `10.0.3.x` に解決されることだけ確認してください。
->
-> ⚠️ ただし本番想定では、Azure SQL Database に到達できるのは SHIR（`vm-shir`）だけです。
-> `vm-source-sql`（オンプレ SQL Server役）からの接続は、あくまで**この検証環境内での作業上の近道**であり、
-> 「どの経路が本番で許可されるべきか」を検証する STEP 1〜4 の趣旨とは切り離して考えてください。
-
-> 接続には、まだ存在しない `dmsuser` ではなく、**STEP 5-1 で作成した `sqladminuser`** を使用します。
+パブリックアクセスを無効にしたため、`vm-shir` から SSMS で接続して実行します。
 
 ```sql
--- master で実行（sqladminuser で接続）
+-- master で実行
 CREATE LOGIN dmsuser WITH PASSWORD = '（強いパスワード）';
-ALTER SERVER ROLE ##MS_DatabaseManager##  ADD MEMBER [dmsuser];
-ALTER SERVER ROLE ##MS_LoginManager##     ADD MEMBER [dmsuser];
-GO
+ALTER SERVER ROLE ##MS_DefinitionReader##  ADD MEMBER [dmsuser];
+ALTER SERVER ROLE ##MS_DatabaseConnector## ADD MEMBER [dmsuser];
+ALTER SERVER ROLE ##MS_DatabaseManager##   ADD MEMBER [dmsuser];
+ALTER SERVER ROLE ##MS_LoginManager##      ADD MEMBER [dmsuser];
+IF NOT EXISTS (SELECT * FROM sys.database_principals WHERE name = 'dmsuser')
+    CREATE USER dmsuser FOR LOGIN dmsuser;
+IF IS_ROLEMEMBER('dbmanager', 'dmsuser') = 0
+    EXEC sp_addrolemember 'dbmanager', 'dmsuser';
+IF IS_ROLEMEMBER('loginmanager', 'dmsuser') = 0
+    EXEC sp_addrolemember 'loginmanager', 'dmsuser';
+"@
+
+$conn = New-Object System.Data.SqlClient.SqlConnection($connStr)
+$conn.Open()
+$cmd = $conn.CreateCommand()
+$cmd.CommandText = $sql
+$cmd.ExecuteNonQuery()
+$conn.Close()
 ```
+
+> `CREATE LOGIN`が既に存在する場合はエラーになるので、初回以降の再実行時はその行を削除してください。
+> `IF NOT EXISTS`/`IS_ROLEMEMBER`のガードを付けているため、②以降の行は何度再実行しても安全です。
+
+**② ターゲットDB（`TestDB1`）に対して実行**（`$connStr`の`Database=master`を`Database=TestDB1`に変更）
+
+```powershell
+$connStr = "Server=tcp:（論理サーバー名）.database.windows.net,1433;Database=TestDB1;User ID=sqladminuser;Password=（強いパスワード）;Encrypt=True;TrustServerCertificate=False;Connection Timeout=60;"
+
+$sql = @"
+IF NOT EXISTS (SELECT * FROM sys.database_principals WHERE name = 'dmsuser')
+    CREATE USER dmsuser FOR LOGIN dmsuser;
+ALTER ROLE db_owner ADD MEMBER dmsuser;
+"@
+
+$conn = New-Object System.Data.SqlClient.SqlConnection($connStr)
+$conn.Open()
+$cmd = $conn.CreateCommand()
+$cmd.CommandText = $sql
+$cmd.ExecuteNonQuery()
+$conn.Close()
+```
+
+> 接続に失敗する場合、Serverless の自動再開待ちの可能性があるので数十秒〜1分後に再実行してください。
+> `sqladminuser` は STEP 5-1 で作成した論理サーバーの管理者アカウントです。
+>
+> **戻り値 `-1` について**：`ExecuteNonQuery()` は影響を受けた行数を返しますが、
+> DDL 文は行を返さないため `-1` が正常な結果です。エラーではありません。
+
+作成できたか確認する場合は、以下を実行します。
+
+```powershell
+$conn = New-Object System.Data.SqlClient.SqlConnection($connStr)
+$conn.Open()
+$cmd = $conn.CreateCommand()
+$cmd.CommandText = "SELECT name FROM sys.sql_logins WHERE name = 'dmsuser'"
+$reader = $cmd.ExecuteReader()
+while ($reader.Read()) { Write-Host $reader["name"] }
+$conn.Close()
+```
+
+`dmsuser` が表示されれば作成済みです。
 
 ---
 
@@ -445,50 +499,55 @@ az provider register --namespace Microsoft.DataMigration
 1. 「Azure Database Migration Service」→「作成」
 2. 設定値：
 
-| 項目 | 設定値 |
-|---|---|
-| リソースグループ | `rg-dms-network-verify` |
-| 移行サービス名 | 任意 |
-| リージョン | Japan East |
-| サービスモード | Azure |
-| 価格レベル | Standard |
+| 項目 | 必須/任意 | 検証での設定値 | 本番での考慮点 |
+|---|---|---|---|
+| サブスクリプション | 必須 | 検証用サブスクリプション | 本番用サブスクリプションを選択（検証と分けるのが一般的） |
+| リソースグループ | 必須 | `rg-dms-network-verify` | 移行完了後にDMSインスタンス自体は不要になるため、削除しやすいよう専用のRGに分けておくと後片付けが楽 |
+| 移行サービス名 | 必須（一意な名前） | 任意（例：`dms-verify`） | 命名規則に従う。他の値と違い変更不可なので付け直しは再作成が必要 |
+| リージョン | 必須 | Japan East | **移行先の Azure SQL Database と同じリージョンを推奨**（DMSのコントロールプレーンとターゲット間の通信レイテンシを避けるため） |
+
+> ソース：SQL Server／ターゲット：Azure SQL Database（オフライン）を選ぶ現行のポータル画面では、
+> サービスモードや価格レベル（SKU）の選択項目自体が表示されません（無料・固定構成）。
 
 ---
 
-## STEP 7｜検証①：ADF 許可 FQDN だけで SHIR が登録できるか
+## STEP 7｜フェーズ1：SHIR のインストールとプロキシ設定
 
 ### 7-1 SHIR のインストーラーを取得する
 
-`vm-shir` にインターネット直結がないため、**vm-shir 上でダウンロードページ（`www.microsoft.com`）を直接開くことはできません**（このドメインは ADF の許可 FQDN に含まれていないため）。
+`vm-shir` にインターネット直結がないため、**作業端末でダウンロードしてから VM にコピー**します。
 
-以下のいずれかの方法で取得してください。
+```
+https://www.microsoft.com/download/details.aspx?id=39717
+```
 
-**方法A（推奨・追加リソース不要）**：`download.microsoft.com` は許可済みなので、そこへ直接アクセスして取得します。
+バージョン **5.37 以上** を使用します。
 
-1. **Mac 側のブラウザ**（インターネット直結）で [Microsoft Integration Runtime のダウンロードページ](https://www.microsoft.com/download/details.aspx?id=39717) を開き、バージョン **5.37 以上** のダウンロードボタンを右クリック →「リンクのアドレスをコピー」
-2. `vm-shir` の PowerShell で直接取得（プロキシ経由）
+### 7-2 プロキシ設定
 
-    ```powershell
-    Invoke-WebRequest -Uri "<コピーしたURL>" -OutFile C:\temp\IntegrationRuntime.msi -Proxy "http://10.0.4.4:3128"
-    ```
+> ⚠️ **`diahost.exe.config` と `diawp.exe.config` の両方を編集する必要があります。**
+> 公式ドキュメントも「両方を忘れずに更新してください」と明記しています。
+> 片方だけだと、プロセスによってはプロキシ未設定＝直結を試みてしまい、
+> NSGの`deny-internet`で失敗する原因になります。
+>
+> **2つのファイルの役割**
+>
+> | ファイル | 対応プロセス | 役割 |
+> |---|---|---|
+> | `diahost.exe.config` | `diahost.exe`（Windowsサービス `DIAHostService` の実体） | ノード登録・Azure Relayとの制御チャネル維持・ハートビート/状態報告 |
+> | `diawp.exe.config` | `diawp.exe`（Worker Process） | `diahost`から起動され、実際のコピー処理（移行タスクの実行・対話型オーサリングの接続テスト等）を実行 |
+>
+> **片方だけ設定した場合の症状の違い**
+>
+> - `diahost.exe.config`だけ設定 → **登録自体は成功する**が、実際にタスクを実行するワーカープロセスが直結を試みて失敗。「登録済み・実行中に見えるのに移行やテスト接続だけ失敗/ハングする」という切り分けにくい形で出やすい
+> - `diawp.exe.config`だけ設定 → **登録自体が失敗する**。後述のトラブルシューティングにある「Disconnected/Connecting状態が続く」「Unable to connect to the remote server」に該当し、比較的すぐ気づける
+>
+> つまり `diawp.exe.config` の設定漏れの方が発見しづらいため、両方揃えて編集することが重要です。
 
-    > URL のドメインが `download.microsoft.com` 以外（CDN 等）の場合は Squid で `TCP_DENIED` になります。その場合はログで実際の宛先ドメインを確認し、検証用に一時的に `squid.conf` の `adf_allowed` へ追加してください（本番の許可 FQDN リストには含めない、検証専用の一時許可であることを明記）。
+以下の2ファイルを**両方とも**同じ内容で編集します。
 
-**方法B（Bastion 経由でファイル転送）**：Mac でダウンロードしたファイルを Bastion 経由で vm-shir にコピーします。
-ただし **Bastion のファイル転送はネイティブクライアントのみ対応で、Standard SKU 以上が必須**です（STEP 1-1 で作成した Basic SKU では不可）。方法Aで解決しない場合のみ、Bastion を Standard SKU へ再作成してください。
-
-### 7-2 ブラウザ／OS のプロキシ設定（SHIR 以外の通信を伴う操作をする場合）
-
-Edge や PowerShell の `Invoke-WebRequest`（`-Proxy` 省略時）など、Squid を明示的に指定しないアプリは既定でプロキシを使わず、NSG の `deny-internet` で直接ブロックされます。
-`vm-shir` 上で SHIR インストーラー以外の Web アクセス（ブラウザでの動作確認等）を行う場合は、Windows の設定からプロキシを構成してください。
-
-- 設定 →「ネットワークとインターネット」→「プロキシ」→ 手動セットアップで `10.0.4.4:3128` を指定
-
-> SHIR 本体の通信（登録・ハートビート等）は STEP 7-3 で編集する `diahost.exe.config` のプロキシ設定に従うため、この OS レベルの設定とは別物です。
-
-### 7-3 SHIR 本体のプロキシ設定
-
-`C:\Program Files\Microsoft Integration Runtime\5.0\Shared\diahost.exe.config` を編集：
+- `C:\Program Files\Microsoft Integration Runtime\5.0\Shared\diahost.exe.config`
+- `C:\Program Files\Microsoft Integration Runtime\5.0\Shared\diawp.exe.config`
 
 ```xml
 <system.net>
@@ -502,112 +561,267 @@ Edge や PowerShell の `Invoke-WebRequest`（`-Proxy` 省略時）など、Squi
 </system.net>
 ```
 
+> **移行元SQL Server（1433）やPE（1433）への通信にバイパス指定は不要**
+> `<defaultProxy>`はHTTP(S)通信（`HttpWebRequest`/`HttpClient`系）にしか効かず、
+> SQL Serverへの接続（`SqlClient`によるTDSプロトコル）は生のTCPソケット接続のため、
+> **この設定を最初から一切参照しません**。実際、.NETの`SqlClient`にはHTTPプロキシ経由でSQL接続する機能自体が存在せず、
+> [dotnet/SqlClientのIssue #315](https://github.com/dotnet/SqlClient/issues/315)でも未実装の機能要望として上がっている状態です。
+> `bypassonlocal="true"`は「ドットを含まない単純なホスト名やループバック」が対象で、`10.0.2.4`や`10.0.3.x`のような
+> IPアドレス宛の通信とは無関係です。1433の通信がプロキシを介さず届くのは、バイパス設定によるものではなく、
+> NSGの`allow-vnet`ルール（VNet内は全ポート許可）による直接到達性によるものです。
+
 編集後、サービスを再起動します。
 
 ```powershell
 Restart-Service DIAHostService
 ```
 
-### 7-3 登録キーの取得と登録
+> この時点で Squid はフェーズ1（全許可）のため、SHIR からのアクセスは全て通過します。
+> 「NSG でインターネット直結を遮断しつつ、プロキシ経由なら何でも通る」＝
+> これまで確認できていた「インターネットを開けた状態での成功」と同じ通信条件です。
+
+---
+
+## STEP 8｜フェーズ1：登録・移行を通しで実行し、必要 FQDN を確定
+
+### 8-1 登録キーの取得と登録
 
 1. Portal → DMS インスタンス → 「統合ランタイム」→ 認証キー1 をコピー
 2. `Microsoft Integration Runtime Configuration Manager` を起動
 3. キーを貼り付けて「登録」
+4. 状態が「実行中」になることを確認
 
-### 7-4 判定
+> **「イントラネットからのリモートアクセスを有効にする」チェックボックスについて**
+> **チェックしない（無効のまま）で進めます。** これは同じネットワーク内の別マシンから
+> `New-AzDataFactoryV2LinkedServiceEncryptedCredential` で資格情報をリモートプッシュしたり、
+> 複数ノードでの高可用性（HA）クラスタを組む際に使う機能で、有効にするとローカルにポート8060
+> （既定）で待ち受けを開始します（＝インバウンド関連の話で、これまでのプロキシ/NSGの
+> アウトバウンド制御とは無関係）。
+>
+> 今回は単一ノード・資格情報はSTEP 8-4のDMS移行プロジェクト作成ウィザードで直接入力する方式のため不要です。
+> なおSHIRセットアップ v3.3以降はインストーラーの既定でこの機能は無効化されています。
 
-**Squid のログを見ながら**登録を実行します。
+### 8-2 サービス URL の確認
 
-| 結果 | 意味 | 対応 |
-|---|---|---|
-| 状態が「実行中」になった | ADF 許可分で足りている | ✅ 追加申請不要（STEP 8 でさらに確認） |
-| 登録が失敗した | 不足 FQDN がある | Squid ログの `TCP_DENIED` を確認 → 記録 |
+1. 同 Configuration Manager の「診断」タブ →「接続のテスト」を実行
+2. 同画面の **「サービス URL」** を開く（DMS インスタンス固有のエンドポイントが一覧表示される）
 
-```bash
-# 拒否された FQDN だけを抽出
-sudo grep TCP_DENIED /var/log/squid/access.log | awk '{print $7}' | sort -u
-```
-
-> **ここで出力された FQDN が「DMS 用に追加申請が必要なもの」です。**
-> 1 つずつ squid.conf に追加 → 再起動 → 再登録 を繰り返し、登録が通るまで確認します。
-> 追加した FQDN は必ず記録してください（STEP 11 の記録シートへ）。
-
----
-
-## STEP 8｜検証②：サービス URL と接続テスト
-
-登録成功後、SHIR が実際に必要とするエンドポイントを確認します。
-
-1. `Microsoft Integration Runtime Configuration Manager` を起動
-2. 「診断」タブ →「接続のテスト」を実行
-3. 同画面の **「サービス URL」** を開く
-
-> **サービス URL には DMS インスタンス固有のエンドポイントが表示されます。**
-> ワイルドカード（`*.servicebus.windows.net` 等）でカバーされているか確認し、
-> カバーされていないものは追加申請リストに加えてください。
-
-さらに Squid ログで実通信を確認します。
-
-```bash
-# 実際にアクセスされた FQDN の一覧（許可・拒否問わず）
-sudo awk '{print $7}' /var/log/squid/access.log | cut -d: -f1 | sort -u
-```
-
----
-
-## STEP 9｜検証③：SQL Database PE への TCP 1433
+### 8-3 SQL Database PE への疎通確認（フェーズ1のうちに実施）
 
 `vm-shir` の PowerShell / コマンドプロンプトで実行します。
 
-### 9-1 DNS 解決の確認
-
 ```powershell
+# DNS解決の確認（期待値: 10.0.3.x が返ること）
 nslookup （論理サーバー名）.database.windows.net
-```
+nslookup 10.0.2.4  # 移行元SQL Server（名前解決不要ならスキップ可）
 
-> **期待値**：`10.0.3.x`（PE のプライベート IP）が返ること
-> グローバル IP が返る場合は Private DNS ゾーンの紐付けを見直してください。
-
-### 9-2 ポート疎通の確認
-
-```powershell
+# ポート疎通の確認
 Test-NetConnection （論理サーバー名）.database.windows.net -Port 1433
+Test-NetConnection 10.0.2.4 -Port 1433
 ```
 
-> `TcpTestSucceeded : True` であれば OK
+> **本番の SHIR には SQL クライアントツール（sqlcmd / SSMS）を入れない前提**のため、
+> ここでは DNS 解決とポート疎通（ネットワーク層）までを `vm-shir` から確認します。
+> **SQL 認証が実際に通るか**（ユーザー名・パスワードでログインできるか）は、
+> STEP 8-4 で DMS の移行プロジェクト作成ウィザードにソース/ターゲットの接続情報を入力した際に、
+> DMS が SHIR 経由で内部的に検証します。ここで失敗する場合、
+> 本 STEP でネットワーク層（DNS・ポート）が OK であれば、原因は認証情報側に絞り込めます。
 
-### 9-3 SQL 接続の確認
-
-```cmd
-sqlcmd -S （論理サーバー名）.database.windows.net -U dmsuser -P （パスワード） -Q "SELECT @@VERSION"
-```
-
-### 9-4 移行元 SQL Server への疎通も確認
-
-```cmd
-sqlcmd -S 10.0.2.4 -U migrateuser -P （パスワード） -Q "SELECT @@VERSION"
-```
-
----
-
-## STEP 10｜検証④：実際に移行を実行
+### 8-4 移行を最後まで実行する
 
 1. Portal → DMS インスタンス → 「移行プロジェクトの新規作成」
 2. ソース：`vm-source-sql`（10.0.2.4）／SQL 認証／`migrateuser`
 3. ターゲット：`（論理サーバー名）.database.windows.net`／`dmsuser`
 4. `TestDB1` を選択してマッピング
 5. スキーマ移行 ✅ ／ データ移行 ✅
+   - 「不足しているスキーマの移行」のオブジェクト種別一覧が表示されたら、**「Users」「Roles」のチェックを外す**
+     （外さないと、ソース側専用の`migrateuser`をターゲットにも複製しようとして下記のようなエラーになる。
+     データ移行自体は成功するため実害はないが、ログが汚れるため最初から対象外にしておくのが無難）
 6. 「移行の開始」
 
-### 判定
+```text
+Deployed failure: Cannot alter the role 'db_datareader', because it does not exist
+or you do not have permission. Object element: [db_datareader] ADD MEMBER [migrateuser].
+
+Deployed failure: Cannot find the user 'dbo', because it does not exist or you do
+not have permission. Object element: [migrateuser].
+```
 
 ```sql
 -- 移行先の Azure SQL Database で実行（3 件返れば成功）
 SELECT COUNT(*) FROM dbo.T1;
 ```
 
-> **移行実行中も Squid のログを監視してください。**
-> 登録時には現れなかった FQDN が、移行実行時に初めて要求される可能性があります。
+### 8-5 実際にアクセスされた FQDN を確定する
+
+登録〜移行が完走したら、Squid のログから通信先 FQDN を**全て**抽出します。
+
+```bash
+# 実際にアクセスされた FQDN の一覧（登録時〜移行完了時までの累積）
+sudo awk '{print $7}' /var/log/squid/access.log | cut -d: -f1 | sort -u
+```
+
+> これが **「DMS のオフライン移行に実際に必要な FQDN の一覧」** です。
+> STEP 11 の記録シートに書き写してください。
+> （任意）本番のADF許可リストを入手済みなら、ここで突き合わせて過不足を確認できます。
+>
+> ⚠️ **`error`という行が出たら、それはFQDNではなくログのパース artifact です。**
+> `Test-NetConnection`のようにTCP接続だけしてHTTPリクエストを送らない通信は、
+> Squidのログに`error:transaction-end-before-headers`のような形で記録されます。
+> これを`cut -d: -f1`で切ると`error`だけが残ってしまうため、リストからは除外してください。
+>
+> また `download.microsoft.com` はSHIRのMSIダウンロード・自動更新用で、**移行の実行自体には不要**です
+> （運用上は許可推奨ですが、フェーズ2で「移行に必須か」だけを見るなら除外して試すこともできます）。
+
+### 公式のSHIRネットワーク要件との差分
+
+実測結果を、[公式のセルフホステッドIRネットワーク要件](https://learn.microsoft.com/ja-jp/azure/data-factory/create-self-hosted-integration-runtime#ports-and-firewalls)と突き合わせた結果、**追加で必要なFQDNはありませんでした**（公式の一般的な要件表の範囲内）。
+
+| 公式の要件（企業ファイアウォールレベル） | 本検証の実測結果 | 判定 |
+|---|---|---|
+| `*.servicebus.windows.net`（443） | 実測あり（複数の`g0`〜`g14`系ノード） | ✅ 一致 |
+| `*.frontend.clouddatahub.net`（443） | 実測あり | ✅ 一致 |
+| `download.microsoft.com`（443、自動更新無効なら不要） | 実測あり（SHIRインストール時） | ✅ 一致 |
+| キーボールトURL（443、Key Vault使用時のみ） | 未使用（資格情報はローカル保存方式） | ✅ 該当なし |
+| `*.core.windows.net`（443、ステージングコピー使用時） | 未使用 | ✅ 該当なし |
+| `*.database.windows.net`（1433、SQL DB/Synapseとの間でコピーする場合） | Squidログには**現れない** | ⚠️ 下記参照 |
+
+> **唯一の注意点：`*.database.windows.net:1433`はプロキシの話ではありません。**
+> SQL Server接続（`SqlClient`のTDSプロトコル）は`<defaultProxy>`を経由しないため、
+> Squidのログには一切記録されません（前述の通り）。公式要件表では他のFQDNと同列に
+> 記載されていますが、実態は「プロキシの許可リストに入れるもの」ではなく
+> 「**プロキシとは別に、NSG/ExpressRoute/ファイアウォールで直接到達性を確保すべきもの**」です。
+> 本番申請時は、443系（プロキシの許可リスト）と`*.database.windows.net:1433`
+> （ファイアウォール/ルーティング側の直接許可）を分けて依頼する必要があります。
+
+---
+
+## STEP 9｜フェーズ2：Squid をフェーズ1で確定した FQDN だけに絞り込む
+
+STEP 8-5 で確定したリストだけを許可するよう、Squid の設定を書き換えます。
+
+```
+# ===== フェーズ2: 絞り込み後の許可リスト =====
+http_port 3128
+
+acl shir_net src 10.0.1.0/24
+
+# ▼▼▼ STEP 8-5 で確定した FQDN（本検証ではワイルドカードで許可） ▼▼▼
+acl dms_required dstdomain .servicebus.windows.net
+acl dms_required dstdomain .frontend.clouddatahub.net
+# `error`（ログのパースartifact）は除外。download.microsoft.comは運用上許可推奨（任意）
+# ▲▲▲
+
+acl SSL_ports port 443
+acl CONNECT method CONNECT
+
+http_access deny CONNECT !SSL_ports
+http_access allow shir_net dms_required
+http_access deny all
+
+access_log /var/log/squid/access.log squid
+```
+
+```bash
+sudo systemctl restart squid
+```
+
+> ログを引き継ぎたくない場合は `sudo truncate -s 0 /var/log/squid/access.log` で一度クリアしておくと、
+> フェーズ2の結果だけを見やすくできます。
+
+---
+
+## STEP 10｜フェーズ2：SHIR を再登録し、移行を再実行して過不足を確認
+
+### 10-1 SHIR の再登録
+
+プロキシ設定（`diahost.exe.config`）は STEP 7-2 のまま変更不要です。Squid 側を絞ったため、
+サービス再起動後に改めて疎通・登録状態を確認します。
+
+```powershell
+Restart-Service DIAHostService
+```
+
+`Microsoft Integration Runtime Configuration Manager` の「診断」タブで「接続のテスト」を再実行し、
+全項目が成功することを確認します。
+
+### 10-2 移行を再実行する
+
+STEP 8-4 と同じ手順で、**別のターゲット DB（`TestDB2`）** に対して移行を実行します。
+同じ `TestDB1` を使い回すと結果の切り分けが難しくなるため、フェーズ2専用に新規作成しておくと明確です。
+
+```bash
+az sql db create --resource-group $RG --server $SQLSERVER --name TestDB2 \
+  --edition GeneralPurpose --family Gen5 --capacity 1 \
+  --compute-model Serverless --min-capacity 0.5 --auto-pause-delay 60
+```
+
+1. Portal → DMS インスタンス → 「移行プロジェクトの新規作成」
+2. ソース：`vm-source-sql`（10.0.2.4）
+3. ターゲット：`（論理サーバー名）.database.windows.net` の `TestDB2`
+4. 「移行の開始」
+
+```sql
+-- 移行先 TestDB2 で実行（3 件返れば成功）
+SELECT COUNT(*) FROM dbo.T1;
+```
+
+### 10-3 判定
+
+```bash
+# フェーズ2で拒否が出ていないか確認
+sudo grep TCP_DENIED /var/log/squid/access.log
+```
+
+| 結果 | 意味 | 対応 |
+|---|---|---|
+| 登録「実行中」＋移行「完了」＋拒否ログなし | **絞り込んだリストで過不足なく動作する** | ✅ このリストを申請すればよい |
+| `TCP_DENIED` が出た | フェーズ1で拾いきれなかった FQDN がある（時限的な通信など） | 拒否された FQDN を acl に追加 → 再起動 → 再実行 |
+| 登録・移行自体が失敗した | ネットワーク以外の要因の可能性 | プロキシ設定・PE疎通を STEP 8-3 の内容で再確認 |
+
+> フェーズ1は1回の実行で全通信パターンを拾いきれない場合があります
+> （初回のみ発生する証明書検証や、時間経過後にだけ発生する通信など）。
+> フェーズ2で拒否が出ても異常ではなく、**それこそがフェーズ2を行う意味**です。
+> 出なくなるまで追加→再実行を繰り返し、最終的なリストを確定させてください。
+
+---
+
+## STEP 10.5｜証跡（ログ）の持ち出し
+
+Bastion Developer SKU はファイル転送に対応していないため、`.evtx`や`.log`ファイルをそのまま
+ダウンロードすることはできません。**テキストのコピー＆ペースト**（Bastionの全SKUで既定有効）を使って、
+必要な内容をテキストとして抜き出します。
+
+### vm-shir のイベントビューアーログ
+
+`vm-shir` の PowerShell で実行し、出力されたテキストを選択して `Ctrl+C` → ローカル側で `Ctrl+V` します。
+
+```powershell
+Get-WinEvent -LogName "Microsoft Integration Runtime/Admin" -MaxEvents 50 |
+    Format-List TimeCreated, LevelDisplayName, Message |
+    Out-String
+```
+
+> エラーだけに絞りたい場合は `Where-Object {$_.LevelDisplayName -eq "Error"}` を挟みます。
+
+### vm-proxy の Squid ログ
+
+`vm-proxy` の Bastion SSH セッションで実行します。
+
+```bash
+# 記録シート（STEP 11）用：確定したFQDN一覧だけを抜き出す（STEP 8-5と同じコマンド）
+sudo awk '{print $7}' /var/log/squid/access.log | cut -d: -f1 | sort -u
+
+# 生ログそのものを見たい場合
+cat /var/log/squid/access.log
+```
+
+表示されたテキストを選択して `Ctrl+C` → ローカル側で `Ctrl+V` します。
+ブラウザがClipboard API非対応の場合は、Bastionセッション画面の `>>`（二重矢印アイコン）から
+クリップボードパレットを開いて操作してください。
+
+> ログが長くて画面に収まらない場合は、`sudo tail -n 200 /var/log/squid/access.log` のように
+> 件数を絞ってから同様にコピーしてください。
 
 ---
 
@@ -615,13 +829,28 @@ SELECT COUNT(*) FROM dbo.T1;
 
 検証しながら以下を埋めてください。そのまま申請資料になります。
 
-### 追加申請が必要な FQDN
+### フェーズ1で確定した必要 FQDN（＝申請リストの元データ）
 
-| # | FQDN | ポート | 検出タイミング | ADF 許可済みか | 備考 |
-|---|---|---|---|---|---|
-| 1 | | 443 | SHIR 登録時 / 移行実行時 | ✅ / ❌ | |
-| 2 | | 443 | | | |
-| 3 | | 443 | | | |
+| # | FQDN | ポート | 用途（推定） | 本番 ADF で許可済みか |
+|---|---|---|---|---|
+| 1 | | 443 | | ✅ / ❌ / 未確認 |
+| 2 | | 443 | | |
+| 3 | | 443 | | |
+| 4 | | 443 | | |
+| 5 | | 443 | | |
+
+> 「本番 ADF で許可済みか」列は、本番のホワイトリストを入手できている場合のみ埋めます。
+> ❌ が付いた行が「DMS 用に新規で申請すべき FQDN」です。
+
+### フェーズ2の結果（絞り込みリストの妥当性）
+
+| 項目 | 結果 |
+|---|---|
+| 再登録が「実行中」になったか | ☐ なった ☐ ならなかった |
+| 移行（TestDB2）が「完了」したか | ☐ 完了 ☐ 失敗 |
+| フェーズ2実行中に TCP_DENIED が出たか | ☐ 出た（右に追記）☐ 出なかった |
+| 追加で許可した FQDN（出た場合） | |
+| 最終的に確定した FQDN 数 | 件 |
 
 ### ポート要件
 
@@ -635,14 +864,32 @@ SELECT COUNT(*) FROM dbo.T1;
 
 | 検証項目 | 結果 |
 |---|---|
-| ① ADF 許可分だけで SHIR 登録できたか | ☐ できた ☐ 追加必要 |
-| ② サービス URL がワイルドカードでカバーされるか | ☐ カバー済 ☐ 追加必要 |
+| ① フェーズ1（オープン）で登録〜移行が成功したか | ☐ 成功 ☐ 失敗 |
+| ② フェーズ1のログから必要 FQDN を確定できたか | ☐ できた（件） |
 | ③ PE への 1433 が通ったか | ☐ 通った ☐ 要 FW 申請 |
-| ④ 移行が完走したか | ☐ 完走 ☐ 失敗 |
+| ④ フェーズ2（絞り込み後）で同じ結果が再現したか | ☐ 再現した ☐ 追加が必要だった |
 
 ---
 
 ## STEP 12｜後片付け
+
+### 12-1 自動シャットダウンの設定（推奨・検証中のコスト削減）
+
+VM の消し忘れによる課金を防ぐため、各 VM 作成後に自動シャットダウンを設定しておきます
+（Azure SQL Database は STEP 5-1／STEP 10-2 で Serverless にしているため未使用時は自動一時停止し、
+この設定は不要です）。
+
+```bash
+# 例：日本時間 20:00 に自動シャットダウン（3台とも同様に設定）
+az vm auto-shutdown --resource-group $RG --name vm-shir       --time 2000 --timezone "Tokyo Standard Time"
+az vm auto-shutdown --resource-group $RG --name vm-source-sql --time 2000 --timezone "Tokyo Standard Time"
+az vm auto-shutdown --resource-group $RG --name vm-proxy      --time 2000 --timezone "Tokyo Standard Time"
+```
+
+> 翌日の検証再開時は Azure Portal または `az vm start` で起動してください。
+> 自動シャットダウンは「割り当て解除（deallocate）」相当のため、停止中は VM 分の課金は発生しません。
+
+### 12-2 検証完了後の削除
 
 検証完了後、**リソースグループごと削除**します。
 
@@ -654,15 +901,17 @@ az group delete --name $RG --yes --no-wait
 
 | リソース | 課金 |
 |---|---|
-| vm-shir（D2s_v3） | 稼働時間課金 |
-| vm-source-sql（D2s_v3・SQL Developer） | VM 分のみ（Developer エディションのライセンスは無償） |
-| vm-proxy（B1s） | 稼働時間課金（少額） |
-| Azure SQL Database（GP_Gen5_2） | 稼働時間課金 |
+| vm-shir（B2ms・バースト可能） | 稼働時間課金（D2s_v3 比で低コスト。自動シャットダウン推奨） |
+| vm-source-sql（B2s・バースト可能・SQL Developer） | VM 分のみ（Developer エディションのライセンスは無償。自動シャットダウン推奨） |
+| vm-proxy（B1s） | 稼働時間課金（少額。自動シャットダウン推奨） |
+| Azure SQL Database（GP Serverless・1 vCore） | 使用量課金＋60分未使用で自動一時停止（アイドル時はほぼ無課金） |
 | Azure DMS（Standard） | Standard SKU は課金なし |
 | Private Endpoint | 時間課金＋データ処理課金（少額） |
+| Azure Bastion（Developer SKU） | **無料** |
 
-> 検証は数日で終わる想定です。**放置すると VM のコストが積み上がる**ため、
-> 中断する場合は VM を停止（割り当て解除）してください。
+> 検証は数日で終わる想定です。VM は自動シャットダウンを設定していても、
+> **リソースグループ自体は残っているとその他の少額課金（PE 等）が積み上がる**ため、
+> 検証が完全に終わったら STEP 12-2 で削除してください。
 
 ---
 
@@ -688,18 +937,20 @@ az group delete --name $RG --yes --no-wait
 
 | 項目 | 確認 |
 |---|---|
-| 本番プロキシの許可 FQDN リストを入手した | ☐ |
-| Squid のホワイトリストを本番と同じ内容にした | ☐ |
+| Azure Bastion（Developer SKU）をデプロイした | ☐ |
 | NSG で SHIR VM のインターネット直結を遮断した | ☐ |
 | 遮断できていることを Test-NetConnection で確認した | ☐ |
-| Squid の access.log を監視しながら検証した | ☐ |
-| SHIR が「実行中」になった | ☐ |
-| 拒否された FQDN を全て記録した | ☐ |
-| 「サービス URL」の内容を確認した | ☐ |
-| PE の DNS がプライベート IP を返した | ☐ |
-| PE へ TCP 1433 で接続できた | ☐ |
-| 移行が完走し件数が一致した | ☐ |
-| 移行実行中のログも確認した | ☐ |
+| Squid をフェーズ1（全許可＋ログ記録）で起動した | ☐ |
+| **フェーズ1**：SHIR が「実行中」になった | ☐ |
+| **フェーズ1**：「サービス URL」の内容を確認した | ☐ |
+| **フェーズ1**：PE の DNS がプライベート IP を返した | ☐ |
+| **フェーズ1**：PE へ TCP 1433 で接続できた | ☐ |
+| **フェーズ1**：移行（TestDB1）が完走し件数が一致した | ☐ |
+| **フェーズ1**：access.log から必要 FQDN を全件抽出した | ☐ |
+| Squid をフェーズ2（絞り込みリスト）に切り替えた | ☐ |
+| **フェーズ2**：SHIR が再度「実行中」になった | ☐ |
+| **フェーズ2**：移行（TestDB2）が完走し件数が一致した | ☐ |
+| **フェーズ2**：TCP_DENIED が出なかった（出た場合は追記して再実行） | ☐ |
 | 記録シートを埋めた | ☐ |
 | 検証環境を削除した | ☐ |
 
@@ -711,9 +962,19 @@ az group delete --name $RG --yes --no-wait
 
 ```
 確認項目：
-① Squid のログに TCP_DENIED が出ていないか
+① Squid のログに TCP_DENIED が出ていないか（フェーズ1では基本的に出ないはず）
 ② キーをコピーミスしていないか（前後の空白）
 ③ DIAHostService を再起動したか（プロキシ設定変更後は必須）
+```
+
+### フェーズ2でだけ登録・移行が失敗する
+
+```
+確認項目：
+① sudo grep TCP_DENIED /var/log/squid/access.log で拒否FQDNを特定する
+② そのFQDNをacl dms_requiredに追加し、Squidを再起動する
+③ フェーズ1で1回の実行では拾いきれなかった通信（初回のみの証明書検証等）の可能性が高いため、
+   Squidの設定を更新して再実行すればよい（異常ではない）
 ```
 
 ### プロキシ設定が効いていない（NSG で遮断されて通信できない）

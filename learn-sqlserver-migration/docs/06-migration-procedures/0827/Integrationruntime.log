@@ -1,0 +1,515 @@
+PS C:\Program Files\Microsoft Integration Runtime\5.0\Shared> # 直近のエラー/警告だけ抽出（全2383件は多すぎるので絞り込み）
+>> Get-WinEvent -LogName "Integration Runtime" -MaxEvents 2000 |
+>>     Where-Object { $_.LevelDisplayName -in @("Error","Warning") -and $_.TimeCreated -gt (Get-Date).AddHours(-3) } |
+>>     Format-List TimeCreated, LevelDisplayName, Message |
+>>     Out-String
+>>
+
+
+TimeCreated      : 8/27/2026 3:44:24 AM
+LevelDisplayName : Error
+Message          : worker プール マネージャーに接続できませんでした: 730dd450-980d-4cc3-a34f-1e674ad17a50。URL: net.tcp://vm-shir:8060/ExternalService.svc/
+
+TimeCreated      : 8/27/2026 3:44:22 AM
+LevelDisplayName : Warning
+Message          : ワーカー プロセス マネージャー チャネルが切断されました。
+
+TimeCreated      : 8/27/2026 3:42:44 AM
+LevelDisplayName : Warning
+Message          : ワーカー プロセス マネージャー チャネルが切断されました。
+
+TimeCreated      : 8/27/2026 3:42:44 AM
+LevelDisplayName : Warning
+Message          : worker プール マネージャーのチャネルが切断されました。
+
+TimeCreated      : 8/27/2026 3:42:44 AM
+LevelDisplayName : Warning
+Message          : ワーカー プロセス マネージャー チャネルが切断されました。
+
+TimeCreated      : 8/27/2026 3:42:44 AM
+LevelDisplayName : Warning
+Message          : worker プール マネージャーのチャネルが切断されました。
+
+TimeCreated      : 8/27/2026 3:42:44 AM
+LevelDisplayName : Warning
+Message          : ワーカー プロセス マネージャー チャネルが切断されました。
+
+TimeCreated      : 8/27/2026 3:42:44 AM
+LevelDisplayName : Warning
+Message          : worker プール マネージャーのチャネルが切断されました。
+
+TimeCreated      : 8/27/2026 3:42:44 AM
+LevelDisplayName : Warning
+Message          : ワーカー プロセス マネージャー チャネルが切断されました。
+
+TimeCreated      : 8/27/2026 3:42:44 AM
+LevelDisplayName : Warning
+Message          : worker プール マネージャーのチャネルが切断されました。
+
+TimeCreated      : 8/27/2026 3:42:44 AM
+LevelDisplayName : Warning
+Message          : ワーカー プロセス マネージャー チャネルが切断されました。
+
+TimeCreated      : 8/27/2026 3:42:44 AM
+LevelDisplayName : Warning
+Message          : ワーカー プロセス マネージャー チャネルが切断されました。
+
+TimeCreated      : 8/27/2026 3:42:44 AM
+LevelDisplayName : Warning
+Message          : worker プール マネージャーのチャネルが切断されました。
+
+TimeCreated      : 8/27/2026 3:42:44 AM
+LevelDisplayName : Warning
+Message          : worker プール マネージャーのチャネルが切断されました。
+
+TimeCreated      : 8/27/2026 3:42:44 AM
+LevelDisplayName : Warning
+Message          : ワーカー プロセス マネージャー チャネルが切断されました。
+
+TimeCreated      : 8/27/2026 3:42:44 AM
+LevelDisplayName : Warning
+Message          : worker プール マネージャーのチャネルが切断されました。
+
+TimeCreated      : 8/27/2026 3:42:44 AM
+LevelDisplayName : Warning
+Message          : worker プール マネージャーのチャネルが切断されました。
+
+TimeCreated      : 8/27/2026 3:42:44 AM
+LevelDisplayName : Warning
+Message          : ワーカー プロセス マネージャー チャネルが切断されました。
+
+TimeCreated      : 8/27/2026 3:42:44 AM
+LevelDisplayName : Warning
+Message          : worker プール マネージャーのチャネルが切断されました。
+
+TimeCreated      : 8/27/2026 3:42:44 AM
+LevelDisplayName : Warning
+Message          : worker プール マネージャーのチャネルが切断されました。
+
+TimeCreated      : 8/27/2026 3:42:44 AM
+LevelDisplayName : Warning
+Message          : worker プール マネージャーのチャネルが切断されました。
+
+TimeCreated      : 8/27/2026 3:42:44 AM
+LevelDisplayName : Warning
+Message          : ワーカー プロセス マネージャー チャネルが切断されました。
+
+TimeCreated      : 8/27/2026 3:42:44 AM
+LevelDisplayName : Warning
+Message          : worker プール マネージャーのチャネルが切断されました。
+
+TimeCreated      : 8/27/2026 3:42:44 AM
+LevelDisplayName : Warning
+Message          : ワーカー プロセス マネージャー チャネルが切断されました。
+
+TimeCreated      : 8/27/2026 3:42:44 AM
+LevelDisplayName : Warning
+Message          : ワーカー プロセス マネージャー チャネルが切断されました。
+
+TimeCreated      : 8/27/2026 3:42:44 AM
+LevelDisplayName : Warning
+Message          : ワーカー プロセス マネージャー チャネルが切断されました。
+
+TimeCreated      : 8/27/2026 3:42:44 AM
+LevelDisplayName : Warning
+Message          : ワーカー プロセス マネージャー チャネルが切断されました。
+
+TimeCreated      : 8/27/2026 3:42:44 AM
+LevelDisplayName : Warning
+Message          : worker プール マネージャーのチャネルが切断されました。
+
+TimeCreated      : 8/27/2026 3:42:44 AM
+LevelDisplayName : Warning
+Message          : ワーカー プロセス マネージャー チャネルが切断されました。
+
+TimeCreated      : 8/27/2026 3:42:44 AM
+LevelDisplayName : Warning
+Message          : worker プール マネージャーのチャネルが切断されました。
+
+TimeCreated      : 8/27/2026 3:42:44 AM
+LevelDisplayName : Warning
+Message          : worker プール マネージャーのチャネルが切断されました。
+
+TimeCreated      : 8/27/2026 3:42:44 AM
+LevelDisplayName : Warning
+Message          : ワーカー プロセス マネージャー チャネルが切断されました。
+
+TimeCreated      : 8/27/2026 3:42:44 AM
+LevelDisplayName : Warning
+Message          : ワーカー プロセス マネージャー チャネルが切断されました。
+
+TimeCreated      : 8/27/2026 3:42:44 AM
+LevelDisplayName : Warning
+Message          : ワーカー プロセス マネージャー チャネルが切断されました。
+
+TimeCreated      : 8/27/2026 3:42:44 AM
+LevelDisplayName : Warning
+Message          : worker プール マネージャーのチャネルが切断されました。
+
+TimeCreated      : 8/27/2026 3:42:44 AM
+LevelDisplayName : Warning
+Message          : worker プール マネージャーのチャネルが切断されました。
+
+TimeCreated      : 8/27/2026 3:42:44 AM
+LevelDisplayName : Warning
+Message          : ワーカー プロセス マネージャー チャネルが切断されました。
+
+TimeCreated      : 8/27/2026 3:42:44 AM
+LevelDisplayName : Warning
+Message          : worker プール マネージャーのチャネルが切断されました。
+
+TimeCreated      : 8/27/2026 3:42:44 AM
+LevelDisplayName : Warning
+Message          : ワーカー プロセス マネージャー チャネルが切断されました。
+
+TimeCreated      : 8/27/2026 3:42:44 AM
+LevelDisplayName : Warning
+Message          : worker プール マネージャーのチャネルが切断されました。
+
+TimeCreated      : 8/27/2026 3:42:44 AM
+LevelDisplayName : Warning
+Message          : worker プール マネージャーのチャネルが切断されました。
+
+TimeCreated      : 8/27/2026 3:42:44 AM
+LevelDisplayName : Warning
+Message          : ワーカー プロセス マネージャー チャネルが切断されました。
+
+TimeCreated      : 8/27/2026 3:42:43 AM
+LevelDisplayName : Error
+Message          : DEBUG:
+                   System.InvalidOperationException: Cannot stop DMGUpgradeService service on computer '.'. --->
+                   System.ComponentModel.Win32Exception: The service has not been started
+                      --- End of inner exception stack trace ---
+                      at System.ServiceProcess.ServiceController.Stop()
+                      at Microsoft.DataTransfer.DIAgentCommandLine.ServiceOptions.RunServiceOptions(CommandLineOptions options)
+                      at Microsoft.DataTransfer.DIAgentCommandLine.Program.RunAdditionalCommands(CommandLineOptions options, Int32& ret)
+                      at Microsoft.DataTransfer.DIAgentCommandLine.Program.RunCommands(CommandLineOptions options)
+                      at Microsoft.DataTransfer.DIAgentCommandLine.Program.Main(String[] args)
+
+TimeCreated      : 8/27/2026 3:42:43 AM
+LevelDisplayName : Error
+Message          : コマンド '-tus' を実行できませんでした。エラー メッセージ: Cannot stop DMGUpgradeService service on computer '.'.
+                   The service has not been started
+                   Cannot stop DMGUpgradeService service on computer '.'.
+                   The service has not been started
+
+TimeCreated      : 8/27/2026 3:42:43 AM
+LevelDisplayName : Error
+Message          : コマンド '-tus' を実行できませんでした。エラー メッセージ: Cannot stop DMGUpgradeService service on computer '.'.
+                   The service has not been started
+
+TimeCreated      : 8/27/2026 3:40:58 AM
+LevelDisplayName : Warning
+Message          : ワーカー プロセス マネージャー チャネルが切断されました。
+
+TimeCreated      : 8/27/2026 3:40:58 AM
+LevelDisplayName : Warning
+Message          : worker プール マネージャーのチャネルが切断されました。
+
+TimeCreated      : 8/27/2026 3:40:58 AM
+LevelDisplayName : Warning
+Message          : ワーカー プロセス マネージャー チャネルが切断されました。
+
+TimeCreated      : 8/27/2026 3:40:58 AM
+LevelDisplayName : Warning
+Message          : ワーカー プロセス マネージャー チャネルが切断されました。
+
+TimeCreated      : 8/27/2026 3:40:58 AM
+LevelDisplayName : Warning
+Message          : ワーカー プロセス マネージャー チャネルが切断されました。
+
+TimeCreated      : 8/27/2026 3:40:58 AM
+LevelDisplayName : Warning
+Message          : ワーカー プロセス マネージャー チャネルが切断されました。
+
+TimeCreated      : 8/27/2026 3:40:58 AM
+LevelDisplayName : Warning
+Message          : worker プール マネージャーのチャネルが切断されました。
+
+TimeCreated      : 8/27/2026 3:40:58 AM
+LevelDisplayName : Warning
+Message          : ワーカー プロセス マネージャー チャネルが切断されました。
+
+TimeCreated      : 8/27/2026 3:40:58 AM
+LevelDisplayName : Warning
+Message          : worker プール マネージャーのチャネルが切断されました。
+
+TimeCreated      : 8/27/2026 3:40:58 AM
+LevelDisplayName : Warning
+Message          : ワーカー プロセス マネージャー チャネルが切断されました。
+
+TimeCreated      : 8/27/2026 3:40:58 AM
+LevelDisplayName : Warning
+Message          : ワーカー プロセス マネージャー チャネルが切断されました。
+
+TimeCreated      : 8/27/2026 3:40:58 AM
+LevelDisplayName : Warning
+Message          : ワーカー プロセス マネージャー チャネルが切断されました。
+
+TimeCreated      : 8/27/2026 3:40:58 AM
+LevelDisplayName : Warning
+Message          : worker プール マネージャーのチャネルが切断されました。
+
+TimeCreated      : 8/27/2026 3:40:58 AM
+LevelDisplayName : Warning
+Message          : worker プール マネージャーのチャネルが切断されました。
+
+TimeCreated      : 8/27/2026 3:40:58 AM
+LevelDisplayName : Warning
+Message          : worker プール マネージャーのチャネルが切断されました。
+
+TimeCreated      : 8/27/2026 3:40:58 AM
+LevelDisplayName : Warning
+Message          : worker プール マネージャーのチャネルが切断されました。
+
+TimeCreated      : 8/27/2026 3:40:58 AM
+LevelDisplayName : Warning
+Message          : worker プール マネージャーのチャネルが切断されました。
+
+TimeCreated      : 8/27/2026 3:40:58 AM
+LevelDisplayName : Warning
+Message          : ワーカー プロセス マネージャー チャネルが切断されました。
+
+TimeCreated      : 8/27/2026 3:40:58 AM
+LevelDisplayName : Warning
+Message          : worker プール マネージャーのチャネルが切断されました。
+
+TimeCreated      : 8/27/2026 3:40:58 AM
+LevelDisplayName : Warning
+Message          : worker プール マネージャーのチャネルが切断されました。
+
+TimeCreated      : 8/27/2026 3:40:58 AM
+LevelDisplayName : Warning
+Message          : ワーカー プロセス マネージャー チャネルが切断されました。
+
+TimeCreated      : 8/27/2026 3:40:58 AM
+LevelDisplayName : Warning
+Message          : ワーカー プロセス マネージャー チャネルが切断されました。
+
+TimeCreated      : 8/27/2026 3:40:58 AM
+LevelDisplayName : Warning
+Message          : worker プール マネージャーのチャネルが切断されました。
+
+TimeCreated      : 8/27/2026 3:40:58 AM
+LevelDisplayName : Warning
+Message          : ワーカー プロセス マネージャー チャネルが切断されました。
+
+TimeCreated      : 8/27/2026 3:40:58 AM
+LevelDisplayName : Warning
+Message          : worker プール マネージャーのチャネルが切断されました。
+
+TimeCreated      : 8/27/2026 3:40:58 AM
+LevelDisplayName : Warning
+Message          : worker プール マネージャーのチャネルが切断されました。
+
+TimeCreated      : 8/27/2026 3:40:58 AM
+LevelDisplayName : Warning
+Message          : ワーカー プロセス マネージャー チャネルが切断されました。
+
+TimeCreated      : 8/27/2026 3:40:58 AM
+LevelDisplayName : Warning
+Message          : ワーカー プロセス マネージャー チャネルが切断されました。
+
+TimeCreated      : 8/27/2026 3:40:58 AM
+LevelDisplayName : Warning
+Message          : ワーカー プロセス マネージャー チャネルが切断されました。
+
+TimeCreated      : 8/27/2026 3:40:58 AM
+LevelDisplayName : Warning
+Message          : worker プール マネージャーのチャネルが切断されました。
+
+TimeCreated      : 8/27/2026 3:40:58 AM
+LevelDisplayName : Warning
+Message          : ワーカー プロセス マネージャー チャネルが切断されました。
+
+TimeCreated      : 8/27/2026 3:40:58 AM
+LevelDisplayName : Warning
+Message          : ワーカー プロセス マネージャー チャネルが切断されました。
+
+TimeCreated      : 8/27/2026 3:40:58 AM
+LevelDisplayName : Warning
+Message          : ワーカー プロセス マネージャー チャネルが切断されました。
+
+TimeCreated      : 8/27/2026 3:40:58 AM
+LevelDisplayName : Warning
+Message          : worker プール マネージャーのチャネルが切断されました。
+
+TimeCreated      : 8/27/2026 3:40:58 AM
+LevelDisplayName : Warning
+Message          : worker プール マネージャーのチャネルが切断されました。
+
+TimeCreated      : 8/27/2026 3:40:58 AM
+LevelDisplayName : Warning
+Message          : ワーカー プロセス マネージャー チャネルが切断されました。
+
+TimeCreated      : 8/27/2026 3:40:58 AM
+LevelDisplayName : Warning
+Message          : worker プール マネージャーのチャネルが切断されました。
+
+TimeCreated      : 8/27/2026 3:40:58 AM
+LevelDisplayName : Warning
+Message          : worker プール マネージャーのチャネルが切断されました。
+
+TimeCreated      : 8/27/2026 3:40:58 AM
+LevelDisplayName : Warning
+Message          : worker プール マネージャーのチャネルが切断されました。
+
+TimeCreated      : 8/27/2026 3:37:23 AM
+LevelDisplayName : Warning
+Message          : ワーカー プロセス マネージャー チャネルが切断されました。
+
+TimeCreated      : 8/27/2026 3:37:23 AM
+LevelDisplayName : Warning
+Message          : worker プール マネージャーのチャネルが切断されました。
+
+TimeCreated      : 8/27/2026 3:37:23 AM
+LevelDisplayName : Warning
+Message          : ワーカー プロセス マネージャー チャネルが切断されました。
+
+TimeCreated      : 8/27/2026 3:37:23 AM
+LevelDisplayName : Warning
+Message          : worker プール マネージャーのチャネルが切断されました。
+
+TimeCreated      : 8/27/2026 3:37:23 AM
+LevelDisplayName : Warning
+Message          : ワーカー プロセス マネージャー チャネルが切断されました。
+
+TimeCreated      : 8/27/2026 3:37:23 AM
+LevelDisplayName : Warning
+Message          : ワーカー プロセス マネージャー チャネルが切断されました。
+
+TimeCreated      : 8/27/2026 3:37:23 AM
+LevelDisplayName : Warning
+Message          : worker プール マネージャーのチャネルが切断されました。
+
+TimeCreated      : 8/27/2026 3:37:23 AM
+LevelDisplayName : Warning
+Message          : worker プール マネージャーのチャネルが切断されました。
+
+TimeCreated      : 8/27/2026 3:37:23 AM
+LevelDisplayName : Warning
+Message          : ワーカー プロセス マネージャー チャネルが切断されました。
+
+TimeCreated      : 8/27/2026 3:37:23 AM
+LevelDisplayName : Warning
+Message          : worker プール マネージャーのチャネルが切断されました。
+
+TimeCreated      : 8/27/2026 3:37:23 AM
+LevelDisplayName : Warning
+Message          : worker プール マネージャーのチャネルが切断されました。
+
+TimeCreated      : 8/27/2026 3:37:23 AM
+LevelDisplayName : Warning
+Message          : worker プール マネージャーのチャネルが切断されました。
+
+TimeCreated      : 8/27/2026 3:37:23 AM
+LevelDisplayName : Warning
+Message          : worker プール マネージャーのチャネルが切断されました。
+
+TimeCreated      : 8/27/2026 3:37:23 AM
+LevelDisplayName : Warning
+Message          : ワーカー プロセス マネージャー チャネルが切断されました。
+
+TimeCreated      : 8/27/2026 3:37:23 AM
+LevelDisplayName : Warning
+Message          : worker プール マネージャーのチャネルが切断されました。
+
+TimeCreated      : 8/27/2026 3:37:23 AM
+LevelDisplayName : Warning
+Message          : ワーカー プロセス マネージャー チャネルが切断されました。
+
+TimeCreated      : 8/27/2026 3:37:23 AM
+LevelDisplayName : Warning
+Message          : ワーカー プロセス マネージャー チャネルが切断されました。
+
+TimeCreated      : 8/27/2026 3:37:23 AM
+LevelDisplayName : Warning
+Message          : worker プール マネージャーのチャネルが切断されました。
+
+TimeCreated      : 8/27/2026 3:37:23 AM
+LevelDisplayName : Warning
+Message          : worker プール マネージャーのチャネルが切断されました。
+
+TimeCreated      : 8/27/2026 3:37:23 AM
+LevelDisplayName : Warning
+Message          : ワーカー プロセス マネージャー チャネルが切断されました。
+
+TimeCreated      : 8/27/2026 3:37:23 AM
+LevelDisplayName : Warning
+Message          : ワーカー プロセス マネージャー チャネルが切断されました。
+
+TimeCreated      : 8/27/2026 3:37:23 AM
+LevelDisplayName : Warning
+Message          : ワーカー プロセス マネージャー チャネルが切断されました。
+
+TimeCreated      : 8/27/2026 3:37:23 AM
+LevelDisplayName : Warning
+Message          : ワーカー プロセス マネージャー チャネルが切断されました。
+
+TimeCreated      : 8/27/2026 3:37:23 AM
+LevelDisplayName : Warning
+Message          : ワーカー プロセス マネージャー チャネルが切断されました。
+
+TimeCreated      : 8/27/2026 3:37:23 AM
+LevelDisplayName : Warning
+Message          : ワーカー プロセス マネージャー チャネルが切断されました。
+
+TimeCreated      : 8/27/2026 3:37:23 AM
+LevelDisplayName : Warning
+Message          : worker プール マネージャーのチャネルが切断されました。
+
+TimeCreated      : 8/27/2026 3:37:23 AM
+LevelDisplayName : Warning
+Message          : worker プール マネージャーのチャネルが切断されました。
+
+TimeCreated      : 8/27/2026 3:37:23 AM
+LevelDisplayName : Warning
+Message          : worker プール マネージャーのチャネルが切断されました。
+
+TimeCreated      : 8/27/2026 3:37:23 AM
+LevelDisplayName : Warning
+Message          : worker プール マネージャーのチャネルが切断されました。
+
+TimeCreated      : 8/27/2026 3:37:23 AM
+LevelDisplayName : Warning
+Message          : ワーカー プロセス マネージャー チャネルが切断されました。
+
+TimeCreated      : 8/27/2026 3:37:23 AM
+LevelDisplayName : Warning
+Message          : worker プール マネージャーのチャネルが切断されました。
+
+TimeCreated      : 8/27/2026 3:37:23 AM
+LevelDisplayName : Warning
+Message          : ワーカー プロセス マネージャー チャネルが切断されました。
+
+TimeCreated      : 8/27/2026 3:37:23 AM
+LevelDisplayName : Warning
+Message          : ワーカー プロセス マネージャー チャネルが切断されました。
+
+TimeCreated      : 8/27/2026 3:37:23 AM
+LevelDisplayName : Warning
+Message          : worker プール マネージャーのチャネルが切断されました。
+
+TimeCreated      : 8/27/2026 3:37:23 AM
+LevelDisplayName : Warning
+Message          : worker プール マネージャーのチャネルが切断されました。
+
+TimeCreated      : 8/27/2026 3:37:23 AM
+LevelDisplayName : Warning
+Message          : ワーカー プロセス マネージャー チャネルが切断されました。
+
+TimeCreated      : 8/27/2026 3:37:23 AM
+LevelDisplayName : Warning
+Message          : worker プール マネージャーのチャネルが切断されました。
+
+TimeCreated      : 8/27/2026 3:37:23 AM
+LevelDisplayName : Warning
+Message          : ワーカー プロセス マネージャー チャネルが切断されました。
+
+TimeCreated      : 8/27/2026 3:37:23 AM
+LevelDisplayName : Warning
+Message          : worker プール マネージャーのチャネルが切断されました。
+
+TimeCreated      : 8/27/2026 3:37:22 AM
+LevelDisplayName : Warning
+Message          : ワーカー プロセス マネージャー チャネルが切断されました。
