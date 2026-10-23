@@ -8,3 +8,35 @@ usami [ ~ ]$ az vm create \
   --admin-username azureuser \
   --admin-password 'P@ssw0rd_20260824' \
   --public-ip-address ""
+
+usami [ ~ ]$ az vm create \                                                                                                                                          
+  --resource-group $RG \
+  --name vm-shir \
+  --image Win2022Datacenter \
+  --size Standard_D2s_v3 \
+  --vnet-name $VNET \
+  --subnet snet-shir \
+  --admin-username azureuser \
+  --admin-password 'P@ssw0rd_20260824' \
+  --public-ip-address ""
+
+DB
+  P@ssword20260824
+
+
+usami [ ~ ]$ az sql server create \
+  --resource-group $RG \
+  --name $SQLSERVER \
+  --location $LOC \
+  --admin-user sqladminuser \
+  --admin-password 'P@ssw0rd_20260824'
+
+CREATE LOGIN dmsuser WITH PASSWORD = 'P@ssw0rd_20260824';
+ALTER SERVER ROLE ##MS_DatabaseManager##  ADD MEMBER [dmsuser];
+ALTER SERVER ROLE ##MS_LoginManager##     ADD MEMBER [dmsuser];
+GO
+
+
+https://www.microsoft.com/ja-jp/download/details.aspx?id=39717#:~:text=106.3%20KB-,%E3%83%80%E3%82%A6%E3%83%B3%E3%83%AD%E3%83%BC%E3%83%89,-%E5%90%88%E8%A8%88%E3%82%B5%E3%82%A4%E3%82%BA%3A%20844.4
+
+https://www.microsoft.com/ja-jp/download/details.aspx?id=39717#:~:text=%E3%81%A6%E6%89%8B%E5%8B%95%E3%81%A7-,%E3%83%80%E3%82%A6%E3%83%B3%E3%83%AD%E3%83%BC%E3%83%89,-%E3%80%82

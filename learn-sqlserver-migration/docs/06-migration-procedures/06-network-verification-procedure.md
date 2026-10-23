@@ -104,6 +104,33 @@ az network vnet subnet create --resource-group $RG --vnet-name $VNET \
   --name snet-proxy --address-prefix 10.0.4.0/24
 ```
 
+### 1-1 Azure Bastion を追加（vm-shir / vm-source-sql への RDP 用）
+
+`vm-shir` と `vm-source-sql` は後続手順で **Public IP なし**（`--public-ip-address ""`）で作成します。
+これは「本番の閉域環境を再現する」ための意図的な構成なので、RDP のためだけに Public IP を追加するのは避け、**Azure Bastion 経由で接続**します。
+
+```bash
+# Bastion 専用サブネット（名前は AzureBastionSubnet 固定・/26 以上が必要）
+az network vnet subnet create --resource-group $RG --vnet-name $VNET \
+  --name AzureBastionSubnet --address-prefix 10.0.10.0/26
+
+# Bastion 用 Public IP
+az network public-ip create --resource-group $RG \
+  --name pip-bastion --sku Standard
+
+# Bastion 本体（Basic SKU＝ブラウザ接続のみで十分、ネイティブクライアント不要なら最安）
+az network bastion create --resource-group $RG \
+  --name bastion-verify --sku Basic \
+  --vnet-name $VNET --public-ip-address pip-bastion \
+  --location $LOC
+```
+
+> ⚠️ Bastion は**時間課金**（Basic SKU で概算 ¥20〜30/時間程度、要現在の価格確認）です。
+> 検証が終わったら他リソースと合わせて `az group delete` で削除してください。
+> 数時間の検証であればコストは軽微です。
+
+**接続方法**：Azure Portal → 対象 VM（`vm-shir` など）の概要ページ →「接続」→「Bastion」タブ → ユーザー名・パスワードを入力して「接続」。ブラウザ上に RDP 画面が開きます（クライアント側の追加インストール不要）。
+
 ---
 
 ## STEP 2｜プロキシ VM（Squid）を構築
@@ -204,7 +231,7 @@ az vm create \
 
 ### 検証用データベースの作成
 
-VM に RDP して SSMS で実行します。
+VM に Bastion 経由で RDP して（STEP 1-1 参照）、SSMS で実行します。
 
 ```sql
 CREATE DATABASE TestDB1;
@@ -219,11 +246,48 @@ CREATE LOGIN migrateuser WITH PASSWORD = '（強いパスワード）';
 USE TestDB1;
 CREATE USER migrateuser FOR LOGIN migrateuser;
 ALTER ROLE db_datareader ADD MEMBER migrateuser;
+
+-- 移行先が Azure SQL Database の場合の公式必須権限（db_datareader だけでは不足）
+USE master;
+GRANT VIEW ANY DEFINITION TO migrateuser;
 GO
 ```
 
+> **`VIEW ANY DEFINITION` を付与し忘れると何が起きるか**：
+> DMS の「移行元のチェック」段階でスキーマ評価が完了できず、エラーも出ないまま止まったように見えます（サーバースペック不足と誤認しやすいので注意）。
+>
+> **検証を早く進めたい場合の代替**（本番には使わない・検証専用の近道）：
+>
+> ```sql
+> ALTER SERVER ROLE sysadmin ADD MEMBER migrateuser;
+> ```
+>
+> 公式には Azure SQL Database 移行で `sysadmin` は不要（`db_datareader` + `VIEW ANY DEFINITION` で足りる設計）ですが、検証環境で権限起因のトラブルを切り分けたくない場合はこちらでも構いません。
+>
+> **さらに手軽にする場合**：`migrateuser` を作らず、既定の **`sa`** アカウント（混合モード有効化済みなら最初から `sysadmin`）を DMS ウィザードにそのまま使う方法もあります。この場合、上記の `CREATE LOGIN` 〜 `GRANT` は全スキップできます。
+
 > SQL Server 構成マネージャーで **TCP/IP プロトコルを有効化**し、
 > Windows ファイアウォールで **TCP 1433 の受信を許可**してください。
+
+```powershell
+# Windows ファイアウォールで 1433 の受信を許可
+New-NetFirewallRule -DisplayName "SQL Server 1433" -Direction Inbound -Protocol TCP -LocalPort 1433 -Action Allow
+```
+
+> TCP/IP プロトコルの有効化は GUI 操作のみ：SQL Server 構成マネージャー →「SQL Server ネットワークの構成」→ 対象インスタンスの「プロトコル」→ TCP/IP を有効化 → SQL Server サービスを再起動。
+
+### 3-1 接続できない場合の切り分け
+
+`az vm create` が `--nsg` 省略時に自動生成する NSG にも、**VNet 内通信を全ポート許可する既定ルール（`AllowVnetInBound`, 優先度65000）が必ず含まれる**ため、同一 VNet 内（`vm-shir` → `vm-source-sql`）の通信は NSG では基本的にブロックされません。
+接続できない場合は、まず NSG ではなく **ゲスト OS 側**（Windows ファイアウォール／SQL Server の TCP/IP 設定）を疑ってください。
+
+**切り分け方法**（`vm-shir` の PowerShell で実行）：
+
+```powershell
+Test-NetConnection 10.0.2.4 -Port 1433
+```
+
+`TcpTestSucceeded` が `False` なら上記 NSG 設定が未実施。`True` なのに接続エラーが出る場合は SQL Server 側（TCP/IP 未有効化・混合モード認証未設定・`migrateuser` の作成漏れ）を疑ってください。
 
 ---
 
@@ -274,7 +338,7 @@ az network vnet subnet update --resource-group $RG --vnet-name $VNET \
 
 ### 4-3 遮断できていることを確認
 
-`vm-shir` に RDP（Bastion 経由推奨）してから PowerShell で実行します。
+`vm-shir` に Bastion 経由で RDP して（STEP 1-1 参照）、PowerShell で実行します。
 
 ```powershell
 # 直接インターネットに出られないこと（失敗すれば OK）
@@ -345,10 +409,22 @@ az network private-endpoint dns-zone-group create \
 
 ### 5-4 移行用ユーザーの作成
 
-パブリックアクセスを無効にしたため、`vm-shir` から SSMS で接続して実行します。
+パブリックアクセスを無効にしたため、VNet 内の VM から SSMS で接続して実行します。
+
+> **`vm-shir` でも `vm-source-sql` でもどちらでも接続できます。**
+> Private DNS ゾーンは `snet-pe` だけでなく **VNet 全体**（`$VNET`）にリンクしているため（STEP 5-3）、
+> `snet-source`（`vm-source-sql`）からも `<論理サーバー名>.database.windows.net` が PE のプライベート IP（`10.0.3.x`）に正しく解決されます。
+> また `snet-source` には制限的な NSG を付けていない（NSG を付けたのは `snet-shir` のみ）ため、TCP 1433 も通ります。
+> SSMS が入っている `vm-source-sql` を使う場合は、事前に `nslookup <論理サーバー名>.database.windows.net` で `10.0.3.x` に解決されることだけ確認してください。
+>
+> ⚠️ ただし本番想定では、Azure SQL Database に到達できるのは SHIR（`vm-shir`）だけです。
+> `vm-source-sql`（オンプレ SQL Server役）からの接続は、あくまで**この検証環境内での作業上の近道**であり、
+> 「どの経路が本番で許可されるべきか」を検証する STEP 1〜4 の趣旨とは切り離して考えてください。
+
+> 接続には、まだ存在しない `dmsuser` ではなく、**STEP 5-1 で作成した `sqladminuser`** を使用します。
 
 ```sql
--- master で実行
+-- master で実行（sqladminuser で接続）
 CREATE LOGIN dmsuser WITH PASSWORD = '（強いパスワード）';
 ALTER SERVER ROLE ##MS_DatabaseManager##  ADD MEMBER [dmsuser];
 ALTER SERVER ROLE ##MS_LoginManager##     ADD MEMBER [dmsuser];
@@ -381,17 +457,36 @@ az provider register --namespace Microsoft.DataMigration
 
 ## STEP 7｜検証①：ADF 許可 FQDN だけで SHIR が登録できるか
 
-### 7-1 SHIR のインストール
+### 7-1 SHIR のインストーラーを取得する
 
-`vm-shir` にインターネット直結がないため、**作業端末でダウンロードしてから VM にコピー**します。
+`vm-shir` にインターネット直結がないため、**vm-shir 上でダウンロードページ（`www.microsoft.com`）を直接開くことはできません**（このドメインは ADF の許可 FQDN に含まれていないため）。
 
-```
-https://www.microsoft.com/download/details.aspx?id=39717
-```
+以下のいずれかの方法で取得してください。
 
-バージョン **5.37 以上** を使用します。
+**方法A（推奨・追加リソース不要）**：`download.microsoft.com` は許可済みなので、そこへ直接アクセスして取得します。
 
-### 7-2 プロキシ設定
+1. **Mac 側のブラウザ**（インターネット直結）で [Microsoft Integration Runtime のダウンロードページ](https://www.microsoft.com/download/details.aspx?id=39717) を開き、バージョン **5.37 以上** のダウンロードボタンを右クリック →「リンクのアドレスをコピー」
+2. `vm-shir` の PowerShell で直接取得（プロキシ経由）
+
+    ```powershell
+    Invoke-WebRequest -Uri "<コピーしたURL>" -OutFile C:\temp\IntegrationRuntime.msi -Proxy "http://10.0.4.4:3128"
+    ```
+
+    > URL のドメインが `download.microsoft.com` 以外（CDN 等）の場合は Squid で `TCP_DENIED` になります。その場合はログで実際の宛先ドメインを確認し、検証用に一時的に `squid.conf` の `adf_allowed` へ追加してください（本番の許可 FQDN リストには含めない、検証専用の一時許可であることを明記）。
+
+**方法B（Bastion 経由でファイル転送）**：Mac でダウンロードしたファイルを Bastion 経由で vm-shir にコピーします。
+ただし **Bastion のファイル転送はネイティブクライアントのみ対応で、Standard SKU 以上が必須**です（STEP 1-1 で作成した Basic SKU では不可）。方法Aで解決しない場合のみ、Bastion を Standard SKU へ再作成してください。
+
+### 7-2 ブラウザ／OS のプロキシ設定（SHIR 以外の通信を伴う操作をする場合）
+
+Edge や PowerShell の `Invoke-WebRequest`（`-Proxy` 省略時）など、Squid を明示的に指定しないアプリは既定でプロキシを使わず、NSG の `deny-internet` で直接ブロックされます。
+`vm-shir` 上で SHIR インストーラー以外の Web アクセス（ブラウザでの動作確認等）を行う場合は、Windows の設定からプロキシを構成してください。
+
+- 設定 →「ネットワークとインターネット」→「プロキシ」→ 手動セットアップで `10.0.4.4:3128` を指定
+
+> SHIR 本体の通信（登録・ハートビート等）は STEP 7-3 で編集する `diahost.exe.config` のプロキシ設定に従うため、この OS レベルの設定とは別物です。
+
+### 7-3 SHIR 本体のプロキシ設定
 
 `C:\Program Files\Microsoft Integration Runtime\5.0\Shared\diahost.exe.config` を編集：
 
@@ -647,6 +742,76 @@ Restart-Service DIAHostService
 登録・移行に必須ではない通信（自動更新など）が拒否されている可能性があります。
 `download.microsoft.com` の拒否は SHIR の自動更新が効かないだけで移行自体は成功します。
 ただし**運用上は許可を推奨**します。
+
+### `vm-shir` でインストーラーのダウンロードページが開けない
+
+`https://www.microsoft.com/download/details.aspx?id=39717` は `www.microsoft.com` ドメインであり、ADF の許可 FQDN（`download.microsoft.com` のみ許可）に含まれないため、`vm-shir` 上のブラウザでは開けません。
+→ STEP 7-1 の方法A（Mac でリンクをコピーし `download.microsoft.com` へ直接 `Invoke-WebRequest`）を使用してください。
+
+### `vm-shir` から `vm-source-sql` への TCP 1433 が届かない
+
+NSG（`AllowVnetInBound` の既定ルール）は VNet 内通信を基本的に許可するため、原因は大抵 **ゲスト OS 側**です。
+
+```powershell
+# vm-source-sql で確認
+netstat -an | findstr 1433                      # LISTENING が出るか（出なければ TCP/IP プロトコル未有効化）
+Get-NetFirewallRule -DisplayName "SQL Server 1433" -ErrorAction SilentlyContinue  # 無ければ New-NetFirewallRule で作成
+```
+
+### `sa` / `migrateuser` で 18456（ログイン失敗）になる
+
+`CREATE LOGIN` はサーバーが Windows 認証専用モードのままでも成功してしまうため、**混合モード認証が実際には有効化されていない**ケースが多いです。
+
+```sql
+EXEC xp_loginconfig 'login mode';   -- "Windows NT Authentication" なら未有効化
+```
+
+```sql
+EXEC xp_instance_regwrite N'HKEY_LOCAL_MACHINE', N'Software\Microsoft\MSSQLServer\MSSQLServer', N'LoginMode', REG_DWORD, 2;
+```
+
+```powershell
+Restart-Service -Name 'MSSQLSERVER' -Force   -- 反映には再起動必須
+```
+
+### DMS の「移行元のチェック」が完了しないまま止まる（エラーも出ない）
+
+サーバースペック不足に見えるが、実際は **`migrateuser` の権限不足**であることが多いです。Azure SQL Database 移行元には `db_datareader` に加えて `VIEW ANY DEFINITION` が必要（公式要件）。
+
+```sql
+USE master;
+GRANT VIEW ANY DEFINITION TO migrateuser;
+-- 手早く切り分けたい場合（検証専用。本番では最小権限に戻す）
+-- ALTER SERVER ROLE sysadmin ADD MEMBER migrateuser;
+```
+
+### 「証明書チェーンが信頼されていない機関から発行された」エラー
+
+`vm-source-sql` は既定の自己署名証明書のままで、IP 接続だと CN 不一致にもなるため、**接続を暗号化する設定のままだと必ず失敗**します。
+
+- SSMS：接続オプションで「サーバー証明書を信頼する」にチェック
+- DMS 移行プロジェクトの「移行元の詳細」画面：同様に「サーバー証明書を信頼する」にチェック（※ SHIR 単体の「接続のテスト」ツールにはこの項目が無く「接続を暗号化する」しか無い。そちらは暗号化のチェックを外せば疎通確認だけは可能）
+- `Trust server certificate` は **証明書チェーン検証とホスト名検証の両方をバイパス**するため、IP 接続でも問題なく機能する
+
+### DMS ジョブでキープアライブ（トークン取得）がタイムアウトする（`Time out to retry`）
+
+宛先（`jpe.frontend.clouddatahub.net` 等）自体は許可済みで他の通信は成功しているのに、この処理だけ断続的にタイムアウトする場合、**SHIR の Worker Process が詰まっている**可能性があります。
+
+```
+Microsoft Integration Runtime 構成マネージャー → 診断タブ → 「問題のトラブルシューティング」を実行
+→ Worker Process Status の Busy 数を確認（Total に対して高い場合は要注意）
+```
+
+```powershell
+Restart-Service DIAHostService   -- 詰まりをクリアしてから再試行
+```
+
+併せて VM の時刻ズレ（トークンの有効期限検証に影響）も確認：
+
+```powershell
+w32tm /query /status
+Get-Date
+```
 
 ---
 

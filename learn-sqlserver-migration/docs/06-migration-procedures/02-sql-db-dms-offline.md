@@ -113,6 +113,9 @@ SET COMPATIBILITY_LEVEL = 100;
 
 作成した Azure SQL Database の `master` で実行します。
 
+> ⚠️ **Azure Portal の Query Editor では実行できません**（`master` への接続に非対応）。
+> SSMS / Azure Data Studio / VS Code（mssql 拡張機能）のいずれかで接続してください。
+
 ```sql
 CREATE LOGIN dmsuser WITH PASSWORD = '（強いパスワード）';
 

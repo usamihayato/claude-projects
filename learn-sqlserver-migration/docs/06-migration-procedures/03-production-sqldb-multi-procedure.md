@@ -195,6 +195,9 @@ ALTER DATABASE DB名2 SET COMPATIBILITY_LEVEL = 100;
 
 論理サーバーの `master` で実行します。
 
+> ⚠️ **Azure Portal の Query Editor では実行できません**（`master` への接続に非対応）。
+> パブリックアクセスも無効化しているため、`vm-shir` に Bastion 等で接続し、SSMS / Azure Data Studio から接続してください。
+
 ```sql
 CREATE LOGIN dmsuser WITH PASSWORD = '（強いパスワード）';
 
