@@ -61,6 +61,13 @@ claude-projects/
 │           ├── 01-verification-procedure.md      ← 自宅検証手順（BACPAC）
 │           ├── 02-production-dms-procedure.md    ← 本番移行手順（Azure DMS・2TB）
 │           └── fact-check.md                     ← 公式ドキュメントによるファクトチェック結果
+├── learn-aws/
+│   └── saa-c03/                                   ← AWS SAA-C03 資格学習プロジェクト
+│       ├── CLAUDE.md
+│       └── quiz/                                  ← 演習ツール（learn-snowflake/quiz と同じUI）
+│           ├── index.html
+│           ├── questions.sample.json
+│           └── README.md
 └── learn-snowflake/                               ← SnowPro Core 資格学習プロジェクト
     ├── CLAUDE.md
     ├── snowflake-docs/                            ← 公式試験学習ガイドPDF（内部使用限定）
@@ -87,6 +94,7 @@ claude-projects/
 | `learn-oci/` | Oracle Cloud Infrastructure (OCI) 学習用プロジェクト | OCI 資格試験対策、インフラ設計 |
 | `learn-collibra-data-quality-and-observablity/` | Collibra Data Quality & Observability 導入調査 | Azure VM（Standalone）上での DQ Agent + Spark 構築 |
 | `learn-sqlserver-migration/` | SQL Server クラウド移行調査 | SQL MI / DMS / ノックアウト要件 / コスト最適化 |
+| `learn-aws/` | AWS 資格学習プロジェクト | SAA-C03 対策、Udemy誤答整理、演習ツール |
 | `learn-snowflake/` | SnowPro Core 資格学習プロジェクト | SnowPro Core (COF-C03) 対策、公式ドキュメント読み込みリスト、Udemy誤答整理、演習ツール |
 
 ---

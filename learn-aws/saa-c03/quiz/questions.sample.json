@@ -1,0 +1,59 @@
+[
+  {
+    "id": "sample-101",
+    "domain": 1,
+    "subtopic": "1.1",
+    "type": "single",
+    "question": "EC2 インスタンス上のアプリケーションから S3 バケットへアクセスさせたい。最もセキュアな認証情報の渡し方はどれですか。",
+    "choices": [
+      "IAM ロールを作成し、インスタンスプロファイルとして EC2 にアタッチする",
+      "IAM ユーザーのアクセスキーをアプリケーションの設定ファイルに保存する",
+      "ルートユーザーのアクセスキーを環境変数に設定する",
+      "S3 バケットポリシーで Principal に \"*\" を許可する"
+    ],
+    "choiceExplanations": [
+      "正しい。インスタンスプロファイル経由で一時的な認証情報が自動でローテーションされ、長期キーを保持する必要がない。",
+      "誤り。長期的なアクセスキーをファイルに置くと漏えいリスクがあり、ローテーションも手動になる。",
+      "誤り。ルートユーザーのアクセスキーは作成自体が非推奨。",
+      "誤り。バケットを全員に公開することになり、最小権限の原則に反する。"
+    ],
+    "answer": [0],
+    "explanation": "AWS のサービスから他のサービスへアクセスさせる場合は、長期的な認証情報ではなく IAM ロールの一時的な認証情報を使うのがベストプラクティスです。",
+    "source": "https://docs.aws.amazon.com/ja_jp/IAM/latest/UserGuide/id_roles_use_switch-role-ec2.html",
+    "tags": ["IAM", "EC2"]
+  },
+  {
+    "id": "sample-102",
+    "domain": 2,
+    "subtopic": "2.2",
+    "type": "multiple",
+    "question": "Amazon RDS のマルチ AZ 配置（スタンバイ 1 台）に関する説明として正しいものを2つ選んでください。",
+    "choices": [
+      "プライマリ障害時にスタンバイへ自動フェイルオーバーする",
+      "スタンバイインスタンスは読み取りクエリを処理できる",
+      "スタンバイへの複製は同期レプリケーションで行われる",
+      "スタンバイは必ず別リージョンに作成される"
+    ],
+    "answer": [0, 2],
+    "explanation": "マルチ AZ 配置（インスタンス 1 台のスタンバイ）は可用性向上が目的で、同一リージョン内の別 AZ に同期レプリケーションされます。スタンバイは読み取りに使えないため、読み取りのスケールにはリードレプリカを使います。",
+    "source": "https://docs.aws.amazon.com/ja_jp/AmazonRDS/latest/UserGuide/Concepts.MultiAZSingleStandby.html",
+    "tags": ["RDS", "高可用性"]
+  },
+  {
+    "id": "sample-103",
+    "domain": 4,
+    "subtopic": "4.1",
+    "type": "single",
+    "question": "アクセス頻度が予測できないデータを S3 に保存する。運用負荷をかけずにストレージコストを最適化したい場合、最適なストレージクラスはどれですか。",
+    "choices": [
+      "S3 Intelligent-Tiering",
+      "S3 Standard",
+      "S3 Glacier Deep Archive",
+      "S3 One Zone-IA"
+    ],
+    "answer": [0],
+    "explanation": "S3 Intelligent-Tiering はアクセスパターンを監視し、オブジェクトを適切なアクセス階層へ自動的に移動します。取り出し料金が発生しないため、アクセスパターンが不明・変動するデータに適しています。",
+    "source": "https://docs.aws.amazon.com/ja_jp/AmazonS3/latest/userguide/intelligent-tiering-overview.html",
+    "tags": ["S3", "コスト最適化"]
+  }
+]
